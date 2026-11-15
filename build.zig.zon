@@ -1,0 +1,15 @@
+.{
+    .name = .ilgi,
+    .version = "0.1.0",
+    .minimum_zig_version = "0.17.0",
+    .dependencies = .{
+        .nanoui = .{
+            .url = "git+https://github.com/ivanleomk/nanoui#310b7fa92f49126bee69baa2a70ee7835103ba23",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}
