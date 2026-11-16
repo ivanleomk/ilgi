@@ -2,6 +2,7 @@
 const std = @import("std");
 const nanoui = @import("nanoui");
 const ui = nanoui.ui;
+const highlight = @import("highlight.zig");
 
 const max_preview_bytes = 1024 * 1024;
 
@@ -11,6 +12,9 @@ pub const Viewer = struct {
     loaded_path: ?[]const u8 = null,
     file_name: ?[]const u8 = null,
     content: ?[]const u8 = null,
+    spans: []const ui.Span = &.{},
+    spans_dark: bool = false,
+    spans_ready: bool = false,
     status: ?[]const u8 = null,
 
     pub fn init(allocator: std.mem.Allocator, io: std.Io) Viewer {
@@ -69,49 +73,63 @@ pub const Viewer = struct {
             self.allocator.free(c);
             self.content = null;
         }
+        if (self.spans.len > 0) {
+            self.allocator.free(self.spans);
+            self.spans = &.{};
+        }
+        self.spans_ready = false;
         // `status` only holds compile-time string literals, so it is never freed.
         self.status = null;
     }
 
-    pub fn view(self: *const Viewer, c: *ui.Context) void {
+    pub fn view(self: *Viewer, c: *ui.Context) void {
         const pane = ui.div(c).column().grow().hFull();
         defer pane.end();
 
-        if (self.file_name) |name| {
-            const topbar = ui.div(c).row().wFull().px(20).py(12).itemsCenter().bg(c.theme.surface);
-            {
-                defer topbar.end();
-                ui.text(c, name, .{ .size = 14, .weight = .semibold });
-            }
-            ui.divider(c);
-
-            const body = ui.div(c).column().grow().wFull().p(20).scrollY();
-            defer body.end();
-            if (self.content) |text| {
-                const mono = isCodeFile(name);
-                ui.text(c, text, .{
-                    .size = if (mono) 12 else 12.5,
-                    .wrap = true,
-                    .mono = mono,
-                    .leading = 1.45,
-                });
-            } else if (self.status) |msg| {
-                ui.text(c, msg, .{ .size = 13, .color = c.theme.muted });
-            }
+        const name = self.file_name orelse {
+            emptyView(c);
             return;
-        }
+        };
 
-        const empty = ui.div(c).column().sizeFull().itemsCenter().justifyCenter().gap(8);
-        defer empty.end();
-        ui.text(c, "Ilgi", .{ .size = 28, .weight = .bold });
-        ui.text(c, "Add a folder or select a file from the sidebar.", .{ .size = 14, .color = c.theme.muted });
+        topbarView(c, name);
+        ui.divider(c);
+
+        const body = ui.div(c).column().grow().wFull().p(20).scrollY();
+        defer body.end();
+
+        const text = self.content orelse {
+            if (self.status) |msg| ui.text(c, msg, .{ .size = 13, .color = c.theme.muted });
+            return;
+        };
+
+        const mono = highlight.isCodeFile(name);
+        self.ensureHighlights(name, text, c.theme.dark);
+        ui.richText(c, text, self.spans, .{
+            .size = if (mono) 12 else 12.5,
+            .wrap = true,
+            .mono = mono,
+            .leading = 1.45,
+        });
+    }
+
+    fn ensureHighlights(self: *Viewer, name: []const u8, text: []const u8, dark: bool) void {
+        if (self.spans_ready and self.spans_dark == dark) return;
+        if (self.spans.len > 0) self.allocator.free(self.spans);
+        self.spans = highlight.highlight(self.allocator, name, text, dark) catch &.{};
+        self.spans_dark = dark;
+        self.spans_ready = true;
     }
 };
 
-fn isCodeFile(name: []const u8) bool {
-    const ext = std.fs.path.extension(name);
-    for ([_][]const u8{ ".zig", ".zon", ".c", ".h", ".rs", ".go", ".py", ".js", ".ts", ".json", ".toml", ".sh" }) |ce| {
-        if (std.ascii.eqlIgnoreCase(ext, ce)) return true;
-    }
-    return false;
+fn topbarView(c: *ui.Context, name: []const u8) void {
+    const topbar = ui.div(c).row().wFull().px(20).py(12).itemsCenter().bg(c.theme.surface);
+    defer topbar.end();
+    ui.text(c, name, .{ .size = 14, .weight = .semibold });
+}
+
+fn emptyView(c: *ui.Context) void {
+    const empty = ui.div(c).column().sizeFull().itemsCenter().justifyCenter().gap(8);
+    defer empty.end();
+    ui.text(c, "Ilgi", .{ .size = 28, .weight = .bold });
+    ui.text(c, "Add a folder or select a file from the sidebar.", .{ .size = 14, .color = c.theme.muted });
 }

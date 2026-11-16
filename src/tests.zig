@@ -7,6 +7,15 @@ const config_mod = @import("config.zig");
 
 comptime {
     _ = config_mod;
+    _ = @import("tests/highlight/zig.zig");
+    _ = @import("tests/highlight/ts.zig");
+    _ = @import("tests/highlight/js.zig");
+    _ = @import("tests/highlight/py.zig");
+    _ = @import("tests/highlight/json.zig");
+    _ = @import("tests/highlight/toml.zig");
+    _ = @import("tests/highlight/sh.zig");
+    _ = @import("tests/highlight/go.zig");
+    _ = @import("tests/highlight/md.zig");
 }
 
 test "Sidebar renders per-folder collapsible trees and previews selected file" {
