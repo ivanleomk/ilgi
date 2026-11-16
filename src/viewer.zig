@@ -2,6 +2,7 @@
 const std = @import("std");
 const nanoui = @import("nanoui");
 const ui = nanoui.ui;
+const highlight = @import("highlight.zig");
 
 const max_preview_bytes = 1024 * 1024;
 
@@ -11,6 +12,8 @@ pub const Viewer = struct {
     loaded_path: ?[]const u8 = null,
     file_name: ?[]const u8 = null,
     content: ?[]const u8 = null,
+    spans: []const ui.Span = &.{},
+    spans_dark: bool = false,
     status: ?[]const u8 = null,
 
     pub fn init(allocator: std.mem.Allocator, io: std.Io) Viewer {
@@ -69,11 +72,15 @@ pub const Viewer = struct {
             self.allocator.free(c);
             self.content = null;
         }
+        if (self.spans.len > 0) {
+            self.allocator.free(self.spans);
+            self.spans = &.{};
+        }
         // `status` only holds compile-time string literals, so it is never freed.
         self.status = null;
     }
 
-    pub fn view(self: *const Viewer, c: *ui.Context) void {
+    pub fn view(self: *Viewer, c: *ui.Context) void {
         const pane = ui.div(c).column().grow().hFull();
         defer pane.end();
 
@@ -89,12 +96,22 @@ pub const Viewer = struct {
             defer body.end();
             if (self.content) |text| {
                 const mono = isCodeFile(name);
-                ui.text(c, text, .{
+                if (mono and (self.spans.len == 0 or self.spans_dark != c.theme.dark)) {
+                    if (self.spans.len > 0) self.allocator.free(self.spans);
+                    self.spans = highlight.highlight(self.allocator, name, text, c.theme.dark) catch &.{};
+                    self.spans_dark = c.theme.dark;
+                }
+                const style: ui.TextStyle = .{
                     .size = if (mono) 12 else 12.5,
                     .wrap = true,
                     .mono = mono,
                     .leading = 1.45,
-                });
+                };
+                if (self.spans.len > 0) {
+                    ui.richText(c, text, self.spans, style);
+                } else {
+                    ui.text(c, text, style);
+                }
             } else if (self.status) |msg| {
                 ui.text(c, msg, .{ .size = 13, .color = c.theme.muted });
             }
