@@ -3,6 +3,7 @@ const std = @import("std");
 const nanoui = @import("nanoui");
 const ui = nanoui.ui;
 const highlight = @import("highlight.zig");
+const markdown = @import("markdown.zig");
 
 const max_preview_bytes = 1024 * 1024;
 
@@ -101,6 +102,11 @@ pub const Viewer = struct {
             if (self.status) |msg| ui.text(c, msg, .{ .size = 13, .color = c.theme.muted });
             return;
         };
+
+        if (markdown.isMarkdownFile(name)) {
+            markdown.view(c, text);
+            return;
+        }
 
         const mono = highlight.isCodeFile(name);
         self.ensureHighlights(name, text, c.theme.dark);
