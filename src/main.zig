@@ -1,15 +1,31 @@
 //! Ilgi: local-first Markdown & knowledge vault.
+const std = @import("std");
 const nanoui = @import("nanoui");
 const app_view = @import("app.zig");
+const config_mod = @import("config.zig");
 
 pub const panic = nanoui.panic;
 pub const std_options = nanoui.std_options;
 pub const std_options_debug_threaded_io = nanoui.std_options_debug_threaded_io;
+pub const std_options_debug_io: std.Io = std.Io.Threaded.global_single_threaded.io();
 
 pub fn main(init: nanoui.Init) void {
     const app = nanoui.App.create(init, .{ .name = "Ilgi" }) catch return;
     defer app.destroy();
-    var state: app_view.State = .{};
+
+    var threaded_io: std.Io.Threaded = .init(app.gpa, .{});
+    defer threaded_io.deinit();
+
+    const cfg_path = config_mod.Config.defaultPath(app.gpa, init.environ) catch null;
+    defer if (cfg_path) |cp| app.gpa.free(cp);
+
+    var state = app_view.State.init(app.gpa, threaded_io.io(), cfg_path);
+    defer state.deinit();
+
+    var args = init.args.iterate();
+    _ = args.next();
+    if (args.next()) |arg_folder| state.addFolder(arg_folder);
+
     _ = app.newWindow(.{
         .title = "Ilgi",
         .width = 960,
