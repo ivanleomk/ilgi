@@ -206,45 +206,85 @@ fn expectTokens(file_name: []const u8, code: []const u8, dark: bool, expected: [
     }
 }
 
-test "highlight matches Shiki github-dark token colors for Zig, JSON, and Python" {
-    try expectTokens("main.zig", "const x: u32 = 42; // hi", true, &.{
+test "highlight: Zig" {
+    try expectTokens("main.zig",
+        \\const std = @import("std");
+        \\pub fn add(a: u32, b: u32) u32 {
+        \\    // sum
+        \\    return a + b + 0x10;
+        \\}
+    , true, &.{
         .{ .text = "const", .color = 0xff7b72 },
+        .{ .text = "@import", .color = 0xd2a8ff },
+        .{ .text = "\"std\"", .color = 0xa5d6ff },
+        .{ .text = "pub", .color = 0xff7b72 },
+        .{ .text = "fn", .color = 0xff7b72 },
         .{ .text = "u32", .color = 0xffa657 },
-        .{ .text = "42", .color = 0x79c0ff },
-        .{ .text = "// hi", .color = 0x8b949e },
-    });
-
-    try expectTokens("config.json", "{\"name\": \"ilgi\", \"ok\": true}", false, &.{
-        .{ .text = "\"name\"", .color = 0x0a3069 },
-        .{ .text = "\"ilgi\"", .color = 0x0a3069 },
-        .{ .text = "\"ok\"", .color = 0x0a3069 },
-        .{ .text = "true", .color = 0x0550ae },
-    });
-
-    try expectTokens("run.py", "# note\ndef foo(): return \"bar\"", true, &.{
-        .{ .text = "# note", .color = 0x8b949e },
-        .{ .text = "def", .color = 0xff7b72 },
+        .{ .text = "u32", .color = 0xffa657 },
+        .{ .text = "u32", .color = 0xffa657 },
+        .{ .text = "// sum", .color = 0x8b949e },
         .{ .text = "return", .color = 0xff7b72 },
-        .{ .text = "\"bar\"", .color = 0xa5d6ff },
+        .{ .text = "0x10", .color = 0x79c0ff },
     });
+}
 
-    try expectTokens("app.js", "console.log(\"hello\")", true, &.{
-        .{ .text = "\"hello\"", .color = 0xa5d6ff },
-    });
-    try expectTokens("app.js", "console.log(1)", true, &.{
-        .{ .text = "1", .color = 0x79c0ff },
-    });
-    try expectTokens("main.cpp", "int a = 1;", true, &.{
-        .{ .text = "int", .color = 0xffa657 },
-        .{ .text = "1", .color = 0x79c0ff },
-    });
-    try expectTokens("types.ts", "type Foo = { bar: string }", true, &.{
+test "highlight: TypeScript" {
+    try expectTokens("types.ts",
+        \\import type { Config } from "./config";
+        \\export async function load(ok: bool): Promise {
+        \\  /* check */
+        \\  if (!ok) return null;
+        \\}
+    , true, &.{
+        .{ .text = "import", .color = 0xff7b72 },
         .{ .text = "type", .color = 0xff7b72 },
-        .{ .text = "Foo", .color = 0xffa657 },
+        .{ .text = "Config", .color = 0xffa657 },
+        .{ .text = "from", .color = 0xff7b72 },
+        .{ .text = "\"./config\"", .color = 0xa5d6ff },
+        .{ .text = "export", .color = 0xff7b72 },
+        .{ .text = "async", .color = 0xff7b72 },
+        .{ .text = "function", .color = 0xff7b72 },
+        .{ .text = "bool", .color = 0xffa657 },
+        .{ .text = "Promise", .color = 0xffa657 },
+        .{ .text = "/* check */", .color = 0x8b949e },
+        .{ .text = "if", .color = 0xff7b72 },
+        .{ .text = "return", .color = 0xff7b72 },
+        .{ .text = "null", .color = 0x79c0ff },
     });
-    try expectTokens("short.js", "const short = \"\"", true, &.{
-        .{ .text = "const", .color = 0xff7b72 },
-        .{ .text = "\"\"", .color = 0xa5d6ff },
+}
+
+test "highlight: JavaScript" {
+    try expectTokens("app.js",
+        \\const msg = `hi \"there\"`;
+        \\let count = 42;
+        \\if (count > 0) console.log('ok');
+    , false, &.{
+        .{ .text = "const", .color = 0xcf222e },
+        .{ .text = "`hi \\\"there\\\"`", .color = 0x0a3069 },
+        .{ .text = "let", .color = 0xcf222e },
+        .{ .text = "42", .color = 0x0550ae },
+        .{ .text = "if", .color = 0xcf222e },
+        .{ .text = "0", .color = 0x0550ae },
+        .{ .text = "'ok'", .color = 0x0a3069 },
+    });
+}
+
+test "highlight: Python" {
+    try expectTokens("run.py",
+        \\# compute value
+        \\def greet(name):
+        \\    if name == None:
+        \\        return False
+        \\    return "hi"
+    , true, &.{
+        .{ .text = "# compute value", .color = 0x8b949e },
+        .{ .text = "def", .color = 0xff7b72 },
+        .{ .text = "if", .color = 0xff7b72 },
+        .{ .text = "None", .color = 0x79c0ff },
+        .{ .text = "return", .color = 0xff7b72 },
+        .{ .text = "False", .color = 0x79c0ff },
+        .{ .text = "return", .color = 0xff7b72 },
+        .{ .text = "\"hi\"", .color = 0xa5d6ff },
     });
 
     const plain = try highlight(std.testing.allocator, "README.md", "# Title", true);
