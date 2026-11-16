@@ -54,6 +54,37 @@ pub const Config = struct {
         try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = bytes });
     }
 
+    /// Adds a folder if `path` is not already configured.
+    /// Defaults `name` to the folder's basename when null/empty.
+    pub fn addFolder(self: *Config, path: []const u8, name: ?[]const u8) !bool {
+        for (self.folders.items) |existing| {
+            if (std.mem.eql(u8, existing.path, path)) return false;
+        }
+        const base = std.fs.path.basename(path);
+        const resolved_name = if (name) |n| (if (n.len > 0) n else base) else base;
+
+        const name_copy = try self.allocator.dupe(u8, if (resolved_name.len > 0) resolved_name else path);
+        errdefer self.allocator.free(name_copy);
+        const path_copy = try self.allocator.dupe(u8, path);
+        errdefer self.allocator.free(path_copy);
+
+        try self.folders.append(self.allocator, .{ .name = name_copy, .path = path_copy });
+        return true;
+    }
+
+    /// Removes the folder matching `path` and frees its owned strings immediately.
+    pub fn removeFolder(self: *Config, path: []const u8) bool {
+        for (self.folders.items, 0..) |folder, i| {
+            if (std.mem.eql(u8, folder.path, path)) {
+                self.allocator.free(folder.name);
+                self.allocator.free(folder.path);
+                _ = self.folders.orderedRemove(i);
+                return true;
+            }
+        }
+        return false;
+    }
+
     /// Parses `Config` from JSON using `std.json`.
     pub fn parse(allocator: std.mem.Allocator, json_bytes: []const u8) !Config {
         var cfg = Config.init(allocator);
@@ -65,11 +96,7 @@ pub const Config = struct {
         defer parsed.deinit();
 
         for (parsed.value.folders) |folder| {
-            const name_copy = try allocator.dupe(u8, folder.name);
-            errdefer allocator.free(name_copy);
-            const path_copy = try allocator.dupe(u8, folder.path);
-            errdefer allocator.free(path_copy);
-            try cfg.folders.append(allocator, .{ .name = name_copy, .path = path_copy });
+            _ = try cfg.addFolder(folder.path, folder.name);
         }
         return cfg;
     }
@@ -119,4 +146,23 @@ test "Config parses, saves, and loads JSON" {
     defer loaded.deinit();
     try std.testing.expectEqual(@as(usize, 2), loaded.folders.items.len);
     try std.testing.expectEqualStrings("/Users/ileo/notes", loaded.folders.items[0].path);
+}
+
+test "Config addFolder deduplicates and removeFolder frees entry" {
+    const alloc = std.testing.allocator;
+    var cfg = Config.init(alloc);
+    defer cfg.deinit();
+
+    try std.testing.expect(try cfg.addFolder("/Users/ileo/notes", null));
+    try std.testing.expectEqualStrings("notes", cfg.folders.items[0].name);
+
+    // Duplicate path is ignored.
+    try std.testing.expect(!try cfg.addFolder("/Users/ileo/notes", "Custom"));
+    try std.testing.expect(try cfg.addFolder("/Users/ileo/ilgi", "Ilgi"));
+    try std.testing.expectEqual(@as(usize, 2), cfg.folders.items.len);
+
+    try std.testing.expect(cfg.removeFolder("/Users/ileo/notes"));
+    try std.testing.expect(!cfg.removeFolder("/Users/ileo/notes"));
+    try std.testing.expectEqual(@as(usize, 1), cfg.folders.items.len);
+    try std.testing.expectEqualStrings("Ilgi", cfg.folders.items[0].name);
 }
