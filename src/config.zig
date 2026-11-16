@@ -23,13 +23,8 @@ pub const Config = struct {
         self.folders.deinit(self.allocator);
     }
 
-    /// Returns `$XDG_CONFIG_HOME/ilgi/config.toml` or `$HOME/.config/ilgi/config.toml`.
+    /// Returns `$HOME/.config/ilgi/config.toml`.
     pub fn defaultPath(allocator: std.mem.Allocator, environ: std.process.Environ) ![]u8 {
-        if (environ.getAlloc(allocator, "XDG_CONFIG_HOME")) |xdg| {
-            defer allocator.free(xdg);
-            if (xdg.len > 0) return std.fs.path.join(allocator, &.{ xdg, "ilgi", "config.toml" });
-        } else |_| {}
-
         const home = try environ.getAlloc(allocator, "HOME");
         defer allocator.free(home);
         return std.fs.path.join(allocator, &.{ home, ".config", "ilgi", "config.toml" });
