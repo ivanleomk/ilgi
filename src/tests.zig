@@ -45,6 +45,7 @@ test "Sidebar lists configured folder entries and persists add/remove" {
     state.sidebar.selectEntry(1);
     t.settle(0.1);
     try std.testing.expectEqualStrings("README.md", state.sidebar.selected_name.?);
+    try std.testing.expect(t.hasText("# Hello Ilgi"));
 
     try std.testing.expect(state.sidebar.config.removeFolder(tmp_path));
     try state.sidebar.config.save(io, cfg_path);
