@@ -183,7 +183,7 @@ fn isConstant(word: []const u8) bool {
 
 fn isTypeName(word: []const u8) bool {
     if (std.ascii.isUpper(word[0])) return true;
-    for ([_][]const u8{ "u8", "u16", "u32", "u64", "usize", "i8", "i16", "i32", "i64", "isize", "f32", "f64", "bool", "void", "anytype" }) |t| {
+    for ([_][]const u8{ "u8", "u16", "u32", "u64", "usize", "i8", "i16", "i32", "i64", "isize", "f32", "f64", "bool", "void", "anytype", "int", "char", "float", "double" }) |t| {
         if (std.mem.eql(u8, word, t)) return true;
     }
     return false;
@@ -230,6 +230,21 @@ test "highlight matches Shiki github-dark token colors for Zig, JSON, and Python
 
     try expectTokens("app.js", "console.log(\"hello\")", true, &.{
         .{ .text = "\"hello\"", .color = 0xa5d6ff },
+    });
+    try expectTokens("app.js", "console.log(1)", true, &.{
+        .{ .text = "1", .color = 0x79c0ff },
+    });
+    try expectTokens("main.cpp", "int a = 1;", true, &.{
+        .{ .text = "int", .color = 0xffa657 },
+        .{ .text = "1", .color = 0x79c0ff },
+    });
+    try expectTokens("types.ts", "type Foo = { bar: string }", true, &.{
+        .{ .text = "type", .color = 0xff7b72 },
+        .{ .text = "Foo", .color = 0xffa657 },
+    });
+    try expectTokens("short.js", "const short = \"\"", true, &.{
+        .{ .text = "const", .color = 0xff7b72 },
+        .{ .text = "\"\"", .color = 0xa5d6ff },
     });
 
     const plain = try highlight(std.testing.allocator, "README.md", "# Title", true);
