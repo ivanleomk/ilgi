@@ -29,7 +29,9 @@ test "Ilgi sidebar adds, persists, previews, and removes folders" {
 
     var state = app_view.State.init(alloc, io, cfg_path);
     defer state.deinit();
-    state.addFolder(tmp_path);
+    _ = try state.config.addFolder(tmp_path, null);
+    try state.config.save(io, cfg_path);
+    state.openDir(tmp_path);
 
     var t: ui.Tester = undefined;
     try t.init(alloc, .init(&state, app_view.State.view), .{ .width = 960, .height = 640 });
@@ -44,7 +46,8 @@ test "Ilgi sidebar adds, persists, previews, and removes folders" {
     t.settle(0.1);
     try std.testing.expect(t.hasText("# Hello Ilgi\nFirst note."));
 
-    state.removeFolder(tmp_path);
+    try std.testing.expect(state.config.removeFolder(tmp_path));
+    try state.config.save(io, cfg_path);
     var reloaded = try config_mod.Config.load(alloc, io, cfg_path);
     defer reloaded.deinit();
     try std.testing.expectEqual(@as(usize, 0), reloaded.folders.items.len);

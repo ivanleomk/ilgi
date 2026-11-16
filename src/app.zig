@@ -16,7 +16,7 @@ pub const State = struct {
     allocator: std.mem.Allocator,
     io: std.Io,
     config: config_mod.Config,
-    config_path: ?[]const u8 = null,
+    config_path: []const u8,
 
     current_dir: ?[]const u8 = null,
     entries_arena: std.heap.ArenaAllocator,
@@ -26,17 +26,14 @@ pub const State = struct {
     file_content: ?[]const u8 = null,
     status_message: ?[]const u8 = null,
 
-    pub fn init(allocator: std.mem.Allocator, io: std.Io, config_path: ?[]const u8) State {
-        const cfg = if (config_path) |cp|
-            config_mod.Config.load(allocator, io, cp) catch config_mod.Config.init(allocator)
-        else
-            config_mod.Config.init(allocator);
+    pub fn init(allocator: std.mem.Allocator, io: std.Io, config_path: []const u8) State {
+        const cfg = config_mod.Config.load(allocator, io, config_path) catch config_mod.Config.init(allocator);
 
         var s: State = .{
             .allocator = allocator,
             .io = io,
             .config = cfg,
-            .config_path = if (config_path) |cp| (allocator.dupe(u8, cp) catch null) else null,
+            .config_path = allocator.dupe(u8, config_path) catch config_path,
             .entries_arena = .init(allocator),
         };
         if (s.config.folders.items.len > 0) {
@@ -49,37 +46,8 @@ pub const State = struct {
         self.clearPreview();
         self.entries_arena.deinit();
         if (self.current_dir) |d| self.allocator.free(d);
-        if (self.config_path) |cp| self.allocator.free(cp);
+        self.allocator.free(self.config_path);
         self.config.deinit();
-    }
-
-    /// Adds `path` to `config.json` and opens it.
-    pub fn addFolder(self: *State, path: []const u8) void {
-        var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
-        const resolved = if (std.Io.Dir.cwd().realPathFile(self.io, path, &buf)) |n| buf[0..n] else |_| path;
-        if (self.config.addFolder(resolved, null) catch false) {
-            self.saveConfig();
-        }
-        self.openDir(resolved);
-    }
-
-    /// Removes `path` from `config.json` and updates the active folder if needed.
-    pub fn removeFolder(self: *State, path: []const u8) void {
-        if (!self.config.removeFolder(path)) return;
-        self.saveConfig();
-
-        if (self.current_dir) |cur| {
-            if (std.mem.eql(u8, cur, path)) {
-                self.allocator.free(cur);
-                self.current_dir = null;
-                self.entries.clearRetainingCapacity();
-                _ = self.entries_arena.reset(.retain_capacity);
-                self.clearPreview();
-                if (self.config.folders.items.len > 0) {
-                    self.openDir(self.config.folders.items[0].path);
-                }
-            }
-        }
     }
 
     /// Opens `path` in the file browser pane.
@@ -188,7 +156,16 @@ pub const State = struct {
                     return;
                 }
                 if (kit.iconButton(c, "xmark", .{ .size = .xs, .tooltip = "Remove folder" }).clicked) {
-                    self.removeFolder(folder.path);
+                    if (self.config.removeFolder(folder.path)) {
+                        self.config.save(self.io, self.config_path) catch {};
+                        if (is_active) {
+                            self.allocator.free(self.current_dir.?);
+                            self.current_dir = null;
+                            self.entries = .empty;
+                            self.clearPreview();
+                            if (self.config.folders.items.len > 0) self.openDir(self.config.folders.items[0].path);
+                        }
+                    }
                     return;
                 }
             }
@@ -286,12 +263,12 @@ pub const State = struct {
         }) catch return;
         const paths = chosen orelse return;
         defer nanoui.dialog.freePaths(self.allocator, paths);
-        if (paths.len > 0) self.addFolder(paths[0]);
-    }
-
-    fn saveConfig(self: *const State) void {
-        const cp = self.config_path orelse return;
-        self.config.save(self.io, cp) catch {};
+        if (paths.len > 0) {
+            if (self.config.addFolder(paths[0], null) catch false) {
+                self.config.save(self.io, self.config_path) catch {};
+            }
+            self.openDir(paths[0]);
+        }
     }
 
     fn clearPreview(self: *State) void {
