@@ -11,20 +11,16 @@ const JsonConfig = struct {
 };
 
 pub const Config = struct {
-    allocator: std.mem.Allocator,
+    arena: std.heap.ArenaAllocator,
     folders: std.ArrayList(Folder) = .empty,
 
     pub fn init(allocator: std.mem.Allocator) Config {
-        return .{ .allocator = allocator };
+        return .{ .arena = .init(allocator) };
     }
 
-    /// Frees every folder's copied `name`/`path` strings, then the list buffer.
+    /// Frees all memory allocated by this `Config` (folders list and all strings) at once.
     pub fn deinit(self: *Config) void {
-        for (self.folders.items) |folder| {
-            self.allocator.free(folder.name);
-            self.allocator.free(folder.path);
-        }
-        self.folders.deinit(self.allocator);
+        self.arena.deinit();
     }
 
     /// Returns `$HOME/.config/ilgi/config.json`.
@@ -49,8 +45,8 @@ pub const Config = struct {
         if (std.fs.path.dirname(path)) |parent| {
             if (parent.len > 0) try std.Io.Dir.cwd().createDirPath(io, parent);
         }
-        const bytes = try self.serialize(self.allocator);
-        defer self.allocator.free(bytes);
+        const bytes = try self.serialize(self.arena.child_allocator);
+        defer self.arena.child_allocator.free(bytes);
         try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = bytes });
     }
 
@@ -66,21 +62,18 @@ pub const Config = struct {
             break :blk n;
         } else std.fs.path.basename(path);
 
-        const name_copy = try self.allocator.dupe(u8, if (resolved_name.len > 0) resolved_name else path);
-        errdefer self.allocator.free(name_copy);
-        const path_copy = try self.allocator.dupe(u8, path);
-        errdefer self.allocator.free(path_copy);
-
-        try self.folders.append(self.allocator, .{ .name = name_copy, .path = path_copy });
+        const alloc = self.arena.allocator();
+        try self.folders.append(alloc, .{
+            .name = try alloc.dupe(u8, if (resolved_name.len > 0) resolved_name else path),
+            .path = try alloc.dupe(u8, path),
+        });
         return true;
     }
 
-    /// Removes the folder matching `path` and frees its owned strings immediately.
+    /// Removes the folder matching `path`. Returns `true` if removed.
     pub fn removeFolder(self: *Config, path: []const u8) bool {
         for (self.folders.items, 0..) |folder, i| {
             if (std.mem.eql(u8, folder.path, path)) {
-                self.allocator.free(folder.name);
-                self.allocator.free(folder.path);
                 _ = self.folders.orderedRemove(i);
                 return true;
             }
@@ -126,7 +119,6 @@ test "Config parses, saves, and loads JSON" {
     const cfg_path = try std.fs.path.join(alloc, &.{ buf[0..len], "ilgi", "config.json" });
     defer alloc.free(cfg_path);
 
-    // Missing file -> empty config.
     var empty = try Config.load(alloc, io, cfg_path);
     defer empty.deinit();
     try std.testing.expectEqual(@as(usize, 0), empty.folders.items.len);
@@ -151,7 +143,7 @@ test "Config parses, saves, and loads JSON" {
     try std.testing.expectEqualStrings("/Users/ileo/notes", loaded.folders.items[0].path);
 }
 
-test "Config addFolder deduplicates and removeFolder frees entry" {
+test "Config addFolder deduplicates and removeFolder removes entry" {
     const alloc = std.testing.allocator;
     var cfg = Config.init(alloc);
     defer cfg.deinit();
@@ -160,7 +152,6 @@ test "Config addFolder deduplicates and removeFolder frees entry" {
     try std.testing.expectEqualStrings("notes", cfg.folders.items[0].name);
     try std.testing.expectError(error.EmptyFolderName, cfg.addFolder("/Users/ileo/empty", ""));
 
-    // Duplicate path is ignored.
     try std.testing.expect(!try cfg.addFolder("/Users/ileo/notes", "Custom"));
     try std.testing.expect(try cfg.addFolder("/Users/ileo/ilgi", "Ilgi"));
     try std.testing.expectEqual(@as(usize, 2), cfg.folders.items.len);
