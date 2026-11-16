@@ -24,6 +24,7 @@ pub const Viewer = struct {
     /// Loads `dir_path/file_name` if it isn't already loaded.
     pub fn open(self: *Viewer, dir_path: []const u8, file_name: []const u8) void {
         const full_path = std.fs.path.join(self.allocator, &.{ dir_path, file_name }) catch return;
+        // Skip re-reading from disk if this file is already cached from an earlier frame.
         if (self.loaded_path) |cur| {
             if (std.mem.eql(u8, cur, full_path)) {
                 self.allocator.free(full_path);
@@ -45,6 +46,7 @@ pub const Viewer = struct {
             self.status = if (err == error.StreamTooLong) "File is larger than 1 MB." else "Could not read file.";
             return;
         };
+        // Guard against binary files or invalid UTF-8 before passing bytes to the text shaper.
         if (std.mem.indexOfScalar(u8, bytes, 0) != null or !std.unicode.utf8ValidateSlice(bytes)) {
             self.allocator.free(bytes);
             self.status = "Binary or non-UTF-8 file (preview unavailable).";
@@ -67,6 +69,7 @@ pub const Viewer = struct {
             self.allocator.free(c);
             self.content = null;
         }
+        // `status` only holds compile-time string literals, so it is never freed.
         self.status = null;
     }
 
