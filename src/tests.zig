@@ -4,6 +4,10 @@ const nanoui = @import("nanoui");
 const ui = nanoui.ui;
 const app_view = @import("app.zig");
 
+comptime {
+    _ = @import("config.zig");
+}
+
 test "Ilgi renders initial welcome view" {
     var state: app_view.State = .{};
     var t: ui.Tester = undefined;
