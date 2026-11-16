@@ -16,6 +16,7 @@ comptime {
     _ = @import("tests/highlight/sh.zig");
     _ = @import("tests/highlight/go.zig");
     _ = @import("tests/highlight/md.zig");
+    _ = @import("tests/markdown.zig");
 }
 
 test "Sidebar renders per-folder collapsible trees and previews selected file" {
@@ -67,7 +68,7 @@ test "Sidebar renders per-folder collapsible trees and previews selected file" {
     // Rows: 0=notes, 1=hello.md, 2=scripts, 3=refresh.sh
     state.sidebar.selectRow(1);
     t.settle(0.1);
-    try std.testing.expect(t.hasText("# Hello Tree"));
+    try std.testing.expect(t.hasText("Hello Tree"));
 
     // Collapse "notes" (row 0): its child row disappears, while scripts & refresh.sh remain.
     state.sidebar.selectRow(0);
