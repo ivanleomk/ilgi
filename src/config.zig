@@ -55,13 +55,16 @@ pub const Config = struct {
     }
 
     /// Adds a folder if `path` is not already configured.
-    /// Defaults `name` to the folder's basename when null/empty.
+    /// Returns `error.EmptyFolderName` if `name` is explicitly empty; defaults to
+    /// the folder's basename when `name` is `null`.
     pub fn addFolder(self: *Config, path: []const u8, name: ?[]const u8) !bool {
         for (self.folders.items) |existing| {
             if (std.mem.eql(u8, existing.path, path)) return false;
         }
-        const base = std.fs.path.basename(path);
-        const resolved_name = if (name) |n| (if (n.len > 0) n else base) else base;
+        const resolved_name = if (name) |n| blk: {
+            if (n.len == 0) return error.EmptyFolderName;
+            break :blk n;
+        } else std.fs.path.basename(path);
 
         const name_copy = try self.allocator.dupe(u8, if (resolved_name.len > 0) resolved_name else path);
         errdefer self.allocator.free(name_copy);
@@ -155,6 +158,7 @@ test "Config addFolder deduplicates and removeFolder frees entry" {
 
     try std.testing.expect(try cfg.addFolder("/Users/ileo/notes", null));
     try std.testing.expectEqualStrings("notes", cfg.folders.items[0].name);
+    try std.testing.expectError(error.EmptyFolderName, cfg.addFolder("/Users/ileo/empty", ""));
 
     // Duplicate path is ignored.
     try std.testing.expect(!try cfg.addFolder("/Users/ileo/notes", "Custom"));
