@@ -228,6 +228,10 @@ test "highlight matches Shiki github-dark token colors for Zig, JSON, and Python
         .{ .text = "\"bar\"", .color = 0xa5d6ff },
     });
 
+    try expectTokens("app.js", "console.log(\"hello\")", true, &.{
+        .{ .text = "\"hello\"", .color = 0xa5d6ff },
+    });
+
     const plain = try highlight(std.testing.allocator, "README.md", "# Title", true);
     defer std.testing.allocator.free(plain);
     try std.testing.expectEqual(@as(usize, 0), plain.len);
