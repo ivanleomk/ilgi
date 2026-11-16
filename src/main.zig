@@ -25,10 +25,10 @@ pub fn main(init: nanoui.Init) void {
     var args = init.args.iterate();
     _ = args.next();
     if (args.next()) |arg_folder| {
-        if (state.config.addFolder(arg_folder, null) catch false) {
-            state.config.save(state.io, state.config_path) catch {};
+        if (state.sidebar.config.addFolder(arg_folder, null) catch false) {
+            state.sidebar.config.save(state.sidebar.io, state.sidebar.config_path) catch {};
         }
-        state.openDir(arg_folder);
+        state.sidebar.openDir(arg_folder);
     }
 
     _ = app.newWindow(.{
