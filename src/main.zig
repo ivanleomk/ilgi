@@ -28,7 +28,7 @@ pub fn main(init: nanoui.Init) void {
         if (state.sidebar.config.addFolder(arg_folder, null) catch false) {
             state.sidebar.config.save(state.sidebar.io, state.sidebar.config_path) catch {};
         }
-        state.sidebar.openDir(arg_folder);
+        state.sidebar.rebuildTree();
     }
 
     _ = app.newWindow(.{

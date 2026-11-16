@@ -88,7 +88,13 @@ pub const Viewer = struct {
             const body = ui.div(c).column().grow().wFull().p(20).scrollY();
             defer body.end();
             if (self.content) |text| {
-                ui.text(c, text, .{ .size = 13.5, .wrap = true, .mono = isCodeFile(name), .leading = 1.45 });
+                const mono = isCodeFile(name);
+                ui.text(c, text, .{
+                    .size = if (mono) 12 else 12.5,
+                    .wrap = true,
+                    .mono = mono,
+                    .leading = 1.45,
+                });
             } else if (self.status) |msg| {
                 ui.text(c, msg, .{ .size = 13, .color = c.theme.muted });
             }
