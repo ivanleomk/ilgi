@@ -37,16 +37,19 @@ pub fn highlight(
     file_name: []const u8,
     src: []const u8,
     dark: bool,
-) ![]ui.Span {
+) std.mem.Allocator.Error![]ui.Span {
     const ext = std.fs.path.extension(file_name);
+    if (std.ascii.eqlIgnoreCase(ext, ".md") or std.ascii.eqlIgnoreCase(ext, ".markdown")) {
+        return highlightMarkdown(allocator, src, dark);
+    }
+    if (!isCodeFile(file_name)) return &.{};
+
     const hash_comments = std.ascii.eqlIgnoreCase(ext, ".py") or
         std.ascii.eqlIgnoreCase(ext, ".sh") or
         std.ascii.eqlIgnoreCase(ext, ".zsh") or
         std.ascii.eqlIgnoreCase(ext, ".toml") or
         std.ascii.eqlIgnoreCase(ext, ".yaml") or
         std.ascii.eqlIgnoreCase(ext, ".yml");
-
-    if (!isSupportedExt(ext)) return &.{};
 
     const pal = Palette.forTheme(dark);
     var spans: std.ArrayList(ui.Span) = .empty;
@@ -133,6 +136,76 @@ pub fn highlight(
     return spans.toOwnedSlice(allocator);
 }
 
+fn highlightMarkdown(allocator: std.mem.Allocator, src: []const u8, dark: bool) std.mem.Allocator.Error![]ui.Span {
+    var out: std.ArrayList(ui.Span) = .empty;
+    errdefer out.deinit(allocator);
+
+    var pos: usize = 0;
+    while (pos < src.len) {
+        const line_end = std.mem.indexOfScalarPos(u8, src, pos, '\n') orelse src.len;
+        const line = std.mem.trim(u8, src[pos..line_end], " \t\r");
+        if (std.mem.startsWith(u8, line, "```")) {
+            const lang = std.mem.trim(u8, line[3..], " \t\r");
+            const code_start = if (line_end < src.len) line_end + 1 else src.len;
+            var scan = code_start;
+            var code_end = src.len;
+            while (scan < src.len) {
+                const next_end = std.mem.indexOfScalarPos(u8, src, scan, '\n') orelse src.len;
+                const inner = std.mem.trim(u8, src[scan..next_end], " \t\r");
+                if (std.mem.startsWith(u8, inner, "```")) {
+                    code_end = scan;
+                    pos = if (next_end < src.len) next_end + 1 else src.len;
+                    break;
+                }
+                scan = if (next_end < src.len) next_end + 1 else src.len;
+            } else {
+                pos = src.len;
+            }
+
+            if (langToFilename(lang)) |virt_name| {
+                const inner_spans = try highlight(allocator, virt_name, src[code_start..code_end], dark);
+                defer allocator.free(inner_spans);
+                for (inner_spans) |sp| {
+                    var shifted = sp;
+                    shifted.start += @intCast(code_start);
+                    shifted.end += @intCast(code_start);
+                    shifted.mono = true;
+                    try out.append(allocator, shifted);
+                }
+            }
+            continue;
+        }
+        pos = if (line_end < src.len) line_end + 1 else src.len;
+    }
+    return out.toOwnedSlice(allocator);
+}
+
+fn langToFilename(lang: []const u8) ?[]const u8 {
+    const map = .{
+        .{ "zig", "a.zig" },
+        .{ "ts", "a.ts" },
+        .{ "typescript", "a.ts" },
+        .{ "js", "a.js" },
+        .{ "javascript", "a.js" },
+        .{ "py", "a.py" },
+        .{ "python", "a.py" },
+        .{ "json", "a.json" },
+        .{ "toml", "a.toml" },
+        .{ "sh", "a.sh" },
+        .{ "bash", "a.sh" },
+        .{ "zsh", "a.zsh" },
+        .{ "go", "a.go" },
+        .{ "rs", "a.rs" },
+        .{ "rust", "a.rs" },
+        .{ "c", "a.c" },
+        .{ "cpp", "a.cpp" },
+    };
+    inline for (map) |entry| {
+        if (std.ascii.eqlIgnoreCase(lang, entry[0])) return entry[1];
+    }
+    return null;
+}
+
 fn appendSpan(spans: *std.ArrayList(ui.Span), alloc: std.mem.Allocator, start: usize, end: usize, color: ui.Color) !void {
     try spans.append(alloc, .{
         .start = @intCast(start),
@@ -149,7 +222,9 @@ fn isIdentCont(ch: u8) bool {
     return std.ascii.isAlphanumeric(ch) or ch == '_';
 }
 
-fn isSupportedExt(ext: []const u8) bool {
+/// Returns true if `file_name` has a supported code/config extension.
+pub fn isCodeFile(file_name: []const u8) bool {
+    const ext = std.fs.path.extension(file_name);
     for ([_][]const u8{
         ".zig", ".zon", ".c",  ".h",    ".cpp", ".rs",   ".go", ".py",
         ".js",  ".ts",  ".jsx", ".tsx", ".json", ".toml", ".yaml", ".yml",
