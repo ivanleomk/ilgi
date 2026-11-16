@@ -140,7 +140,7 @@ pub const Sidebar = struct {
                 const icon_fg = if (selected) c.theme.accent_text else c.theme.muted;
 
                 if (row.is_dir) {
-                    ui.icon(c, if (row.expanded) "chevron.down" else "chevron.right", .{ .size = 10, .color = icon_fg });
+                    ui.icon(c, if (row.expanded) "chevron.down" else "chevron.right", .{ .size = 10, .frame = 14, .color = icon_fg });
                     ui.icon(c, if (row.is_root) "folder.fill" else "folder", .{ .size = 13, .color = if (row.is_root) c.theme.accent else icon_fg });
                 } else {
                     ui.icon(c, "doc.text", .{ .size = 13, .color = icon_fg });
