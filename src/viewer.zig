@@ -342,17 +342,30 @@ pub const Viewer = struct {
     }
 
     fn renderLinkChips(self: *Viewer, c: *ui.Context, src: []const u8, seed: usize) void {
-        const links = markdown.extractLinks(c.alloc(), src) catch return;
-        if (links.len == 0) return;
+        const wiki_links = markdown.extractLinks(c.alloc(), src) catch &.{};
+        const md_links = markdown.extractMarkdownLinks(c.alloc(), src) catch &.{};
+        if (wiki_links.len == 0 and md_links.len == 0) return;
 
         const bar = ui.div(c).row().wFull().gap(6).pt(2);
         defer bar.end();
-        for (links, 0..) |target, li| {
+        for (wiki_links, 0..) |target, li| {
             ui.keyInt(c, 500_000 + seed * 32 + li);
             const label = c.print("↗ {s}", .{target});
             if (kit.button(c, label, .{ .variant = .ghost, .size = .xs }).clicked) {
                 if (self.pending_link) |old| self.allocator.free(old);
                 self.pending_link = self.allocator.dupe(u8, target) catch null;
+            }
+        }
+        for (md_links, 0..) |link, mi| {
+            ui.keyInt(c, 600_000 + seed * 32 + mi);
+            const label = c.print("↗ {s}", .{link.label});
+            if (kit.button(c, label, .{ .variant = .ghost, .size = .xs }).clicked) {
+                if (std.mem.startsWith(u8, link.url, "http://") or std.mem.startsWith(u8, link.url, "https://")) {
+                    _ = nanoui.shell.openUrl(link.url);
+                } else {
+                    if (self.pending_link) |old| self.allocator.free(old);
+                    self.pending_link = self.allocator.dupe(u8, link.url) catch null;
+                }
             }
         }
     }
