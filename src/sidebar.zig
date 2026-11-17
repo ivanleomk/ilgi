@@ -165,10 +165,10 @@ pub const Sidebar = struct {
         const root = ui.div(c).column().w(260).hFull().bg(c.theme.surface);
         defer root.end();
 
-        const header = ui.div(c).row().wFull().p(12).itemsCenter().justifyBetween().gap(4);
+        const header = ui.div(c).row().wFull().px(12).py(10).itemsCenter().justifyBetween().gap(4);
         {
             defer header.end();
-            ui.text(c, "Ilgi", .{ .size = 16, .weight = .bold });
+            ui.text(c, "Ilgi", .{ .size = 15, .weight = .bold });
             const actions = ui.div(c).row().itemsCenter().gap(2);
             defer actions.end();
             if (self.config.folders.items.len > 0) {
@@ -179,7 +179,7 @@ pub const Sidebar = struct {
                     self.startCreate(.folder);
                 }
             }
-            if (kit.button(c, "Add", .{ .variant = .secondary, .size = .sm, .icon = "plus" }).clicked) {
+            if (kit.iconButton(c, "plus", .{ .size = .sm, .tooltip = "Add folder" }).clicked) {
                 self.pickFolder();
             }
         }
@@ -207,25 +207,25 @@ pub const Sidebar = struct {
         }
 
         ui.divider(c);
-        const list = ui.div(c).column().grow().wFull().p(6).gap(2).scrollY();
+        const list = ui.div(c).column().grow().wFull().p(8).gap(1).scrollY();
         defer list.end();
 
         if (self.rows.items.len == 0) {
             const box = ui.div(c).wFull().p(12);
             defer box.end();
-            ui.text(c, "No folders yet. Click + Add.", .{ .size = 12.5, .color = c.theme.muted });
+            ui.text(c, "No folders yet. Click + to add one.", .{ .size = 12.5, .color = c.theme.muted });
             return;
         }
 
         for (self.rows.items, 0..) |row, i| {
             ui.keyInt(c, i);
             const selected = self.isSelectedFile(row);
-            const indent: f32 = @as(f32, @floatFromInt(row.depth)) * 14 + 8;
+            const indent: f32 = @as(f32, @floatFromInt(row.depth)) * 16 + 8;
 
             const outer = ui.div(c).row().wFull().itemsCenter().gap(2);
             defer outer.end();
 
-            var btn = ui.div(c).row().grow().pl(indent).pr(8).py(5).rounded(6).itemsCenter().gap(6).control();
+            var btn = ui.div(c).row().grow().pl(indent).pr(8).py(4).rounded(6).itemsCenter().gap(6).control();
             btn = if (selected) btn.bg(c.theme.accent) else btn.hover(c.theme.surface_hover);
             {
                 defer btn.end();
@@ -236,7 +236,9 @@ pub const Sidebar = struct {
                     ui.icon(c, if (row.expanded) "chevron.down" else "chevron.right", .{ .size = 10, .frame = 14, .color = icon_fg });
                     ui.icon(c, if (row.is_root) "folder.fill" else "folder", .{ .size = 13, .color = if (row.is_root) c.theme.accent else icon_fg });
                 } else {
-                    ui.icon(c, "doc.text", .{ .size = 13, .color = icon_fg });
+                    // Align file icons with the parent folder's icon (past the 14px chevron).
+                    ui.div(c).w(14).end();
+                    ui.icon(c, "doc.text", .{ .size = 12.5, .color = icon_fg });
                 }
 
                 const nb = ui.div(c).grow().clip();
