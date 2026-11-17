@@ -224,8 +224,9 @@ pub const Viewer = struct {
         const tab_inserted = self.handleTabKey(c, &self.block_buf);
         const block_text = self.block_buf.buf.items;
         const is_fenced = std.mem.startsWith(u8, std.mem.trimStart(u8, block_text, " \t"), "```");
+        const closed_fence = is_fenced and hasClosingFence(block_text);
         const live_spans = if (is_fenced)
-            (highlight.highlight(c.alloc(), "block.md", block_text, c.theme.dark) catch &.{})
+            (highlight.highlight(c.alloc(), fenceFilename(c.alloc(), block_text), block_text, c.theme.dark) catch &.{})
         else
             (markdown.liveSpans(c.alloc(), block_text, c.theme.muted, c.theme.surface_hover, c.theme.accent) catch &.{});
 
@@ -235,7 +236,7 @@ pub const Viewer = struct {
             .mono = is_fenced,
             .spans = live_spans,
             .max_lines = 64,
-            .submit_on_return = !is_fenced,
+            .submit_on_return = !is_fenced or closed_fence,
             .bare = true,
         });
         if (c.focused_text) |ft| {
@@ -381,6 +382,23 @@ pub const Viewer = struct {
         self.spans_ready = true;
     }
 };
+
+fn hasClosingFence(src: []const u8) bool {
+    const nl = std.mem.indexOfScalar(u8, src, '\n') orelse return false;
+    var rest = src[nl + 1 ..];
+    const last_nl = std.mem.lastIndexOfScalar(u8, rest, '\n');
+    const last_line = if (last_nl) |idx| rest[idx + 1 ..] else rest;
+    return std.mem.startsWith(u8, std.mem.trim(u8, last_line, " \t\r"), "```");
+}
+
+fn fenceFilename(alloc: std.mem.Allocator, src: []const u8) []const u8 {
+    const nl = std.mem.indexOfScalar(u8, src, '\n') orelse return "block.md";
+    const first = std.mem.trim(u8, src[0..nl], " \t\r");
+    if (!std.mem.startsWith(u8, first, "```")) return "block.md";
+    const lang = std.mem.trim(u8, first[3..], " \t");
+    if (lang.len == 0) return "block.md";
+    return std.fmt.allocPrint(alloc, "block.{s}", .{lang}) catch "block.md";
+}
 
 fn blockFontSize(src: []const u8) f32 {
     if (std.mem.startsWith(u8, src, "# ")) return 20;
