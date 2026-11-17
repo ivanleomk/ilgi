@@ -168,10 +168,14 @@ pub const Viewer = struct {
             return;
         }
 
+        const mono = highlight.isCodeFile(name);
+        const code_spans = if (mono) (highlight.highlight(c.alloc(), name, self.edit_buf.buf.items, c.theme.dark) catch &.{}) else &.{};
         const res = ui.textArea(c, &self.edit_buf, .{
             .placeholder = "Start typing...",
             .width = .fill,
-            .size = 12.5,
+            .size = if (mono) 12 else 12.5,
+            .mono = mono,
+            .spans = code_spans,
             .max_lines = 255,
             .submit_on_return = false,
             .bare = true,
@@ -196,10 +200,18 @@ pub const Viewer = struct {
         const next_id = self.renderBlockSlice(c, src[0..r_start], 0, 0);
 
         ui.key(c, "active-md-block");
-        const is_fenced = std.mem.startsWith(u8, std.mem.trimStart(u8, self.block_buf.buf.items, " \t"), "```");
+        const block_text = self.block_buf.buf.items;
+        const is_fenced = std.mem.startsWith(u8, std.mem.trimStart(u8, block_text, " \t"), "```");
+        const live_spans = if (is_fenced)
+            (highlight.highlight(c.alloc(), "block.md", block_text, c.theme.dark) catch &.{})
+        else
+            (markdown.liveSpans(c.alloc(), block_text, c.theme.muted, c.theme.surface_hover) catch &.{});
+
         const res = ui.textArea(c, &self.block_buf, .{
             .width = .fill,
-            .size = blockFontSize(self.block_buf.buf.items),
+            .size = blockFontSize(block_text),
+            .mono = is_fenced,
+            .spans = live_spans,
             .max_lines = 64,
             .submit_on_return = !is_fenced,
             .bare = true,
