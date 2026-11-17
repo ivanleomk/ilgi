@@ -101,4 +101,9 @@ test "Sidebar renders per-folder collapsible trees and previews selected file" {
     try state.sidebar.deleteRow(3);
     t.settle(0.1);
     try std.testing.expect(!t.hasText("new.md"));
+
+    // Wikilink navigation: opening [[hello]] selects hello.md, and [[missing]] creates missing.md.
+    state.sidebar.openLink("missing");
+    t.settle(0.1);
+    try std.testing.expect(t.hasText("missing.md"));
 }

@@ -36,18 +36,25 @@ test "markdown.view renders headings, bullets, inline formatting, and code block
     try std.testing.expect(t.hasText("const x: u32 = 42;"));
 }
 
-test "markdown.liveSpans styles bold, italic, and inline code inside raw Markdown" {
+test "markdown.liveSpans styles bold, italic, inline code, and wikilinks inside raw Markdown" {
     const alloc = std.testing.allocator;
-    const raw = "Hi **bold** and *it* and `code`";
-    const spans = try markdown.liveSpans(alloc, raw, ui.Color.hex(0x6e6e73), ui.Color.hex(0x2c2c2e));
+    const raw = "Hi **bold** and *it* and `code` and [[Page]]";
+    const spans = try markdown.liveSpans(alloc, raw, ui.Color.hex(0x6e6e73), ui.Color.hex(0x2c2c2e), ui.Color.hex(0x0a84ff));
     defer alloc.free(spans);
 
-    // 3 spans per inline marker group (open marker, inner styled text, close marker) = 9 spans.
-    try std.testing.expectEqual(@as(usize, 9), spans.len);
+    // 3 spans per inline marker group (open marker, inner styled text, close marker) = 12 spans.
+    try std.testing.expectEqual(@as(usize, 12), spans.len);
     try std.testing.expectEqualStrings("bold", raw[spans[1].start..spans[1].end]);
     try std.testing.expectEqual(ui.Weight.bold, spans[1].weight.?);
     try std.testing.expectEqualStrings("it", raw[spans[4].start..spans[4].end]);
     try std.testing.expect(spans[4].italic);
     try std.testing.expectEqualStrings("code", raw[spans[7].start..spans[7].end]);
     try std.testing.expect(spans[7].mono);
+    try std.testing.expectEqualStrings("Page", raw[spans[10].start..spans[10].end]);
+    try std.testing.expect(spans[10].underline);
+
+    const links = try markdown.extractLinks(alloc, raw);
+    defer alloc.free(links);
+    try std.testing.expectEqual(@as(usize, 1), links.len);
+    try std.testing.expectEqualStrings("Page", links[0]);
 }

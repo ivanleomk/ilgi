@@ -26,6 +26,7 @@ pub const Viewer = struct {
     editing_block: bool = false,
     active_range: markdown.BlockRange = .{ .start = 0, .end = 0 },
     block_buf: ui.TextBuffer = .{},
+    pending_link: ?[]const u8 = null,
 
     pub fn init(allocator: std.mem.Allocator, io: std.Io) Viewer {
         return .{ .allocator = allocator, .io = io };
@@ -94,6 +95,10 @@ pub const Viewer = struct {
         self.mode = .read;
         self.dirty = false;
         self.editing_block = false;
+        if (self.pending_link) |pl| {
+            self.allocator.free(pl);
+            self.pending_link = null;
+        }
         self.edit_buf.clear();
         self.block_buf.clear();
         // `status` only holds compile-time string literals, so it is never freed.
@@ -159,6 +164,15 @@ pub const Viewer = struct {
             return;
         }
 
+        if (self.mode != .read) {
+            if (c.input.shortcut) |sc| {
+                if (sc.cmd and (sc.key == 's' or sc.key == 'S')) {
+                    self.save();
+                    c.input.shortcut = null;
+                }
+            }
+        }
+
         if (self.mode == .read) {
             self.renderRead(c, name, self.content.?);
             return;
@@ -170,6 +184,7 @@ pub const Viewer = struct {
         }
 
         const mono = highlight.isCodeFile(name);
+        if (self.handleEditShortcuts(c, &self.edit_buf, false)) self.dirty = true;
         const code_spans = if (mono) (highlight.highlight(c.alloc(), name, self.edit_buf.buf.items, c.theme.dark) catch &.{}) else &.{};
         const res = ui.textArea(c, &self.edit_buf, .{
             .placeholder = "Start typing...",
@@ -201,12 +216,13 @@ pub const Viewer = struct {
         const next_id = self.renderBlockSlice(c, src[0..r_start], 0, 0);
 
         ui.key(c, "active-md-block");
+        _ = self.handleEditShortcuts(c, &self.block_buf, true);
         const block_text = self.block_buf.buf.items;
         const is_fenced = std.mem.startsWith(u8, std.mem.trimStart(u8, block_text, " \t"), "```");
         const live_spans = if (is_fenced)
             (highlight.highlight(c.alloc(), "block.md", block_text, c.theme.dark) catch &.{})
         else
-            (markdown.liveSpans(c.alloc(), block_text, c.theme.muted, c.theme.surface_hover) catch &.{});
+            (markdown.liveSpans(c.alloc(), block_text, c.theme.muted, c.theme.surface_hover, c.theme.accent) catch &.{});
 
         const res = ui.textArea(c, &self.block_buf, .{
             .width = .fill,
@@ -242,22 +258,73 @@ pub const Viewer = struct {
         const blocks = markdown.splitBlocks(c.alloc(), slice) catch return start_id;
         for (blocks, 0..) |b, i| {
             ui.keyInt(c, start_id + i);
+            const block_src = slice[b.start..b.end];
             const row = ui.div(c).wFull().control();
             {
                 defer row.end();
-                markdown.view(c, slice[b.start..b.end]);
+                markdown.view(c, block_src);
             }
             if (row.clicked()) {
                 self.editBlock(.{ .start = base_offset + b.start, .end = base_offset + b.end });
                 return start_id + i + 1;
             }
+            self.renderLinkChips(c, block_src, start_id + i);
         }
         return start_id + blocks.len;
+    }
+
+    fn renderLinkChips(self: *Viewer, c: *ui.Context, src: []const u8, seed: usize) void {
+        const links = markdown.extractLinks(c.alloc(), src) catch return;
+        if (links.len == 0) return;
+
+        const bar = ui.div(c).row().wFull().gap(6).pt(2);
+        defer bar.end();
+        for (links, 0..) |target, li| {
+            ui.keyInt(c, 500_000 + seed * 32 + li);
+            const label = c.print("↗ {s}", .{target});
+            if (kit.button(c, label, .{ .variant = .ghost, .size = .xs }).clicked) {
+                if (self.pending_link) |old| self.allocator.free(old);
+                self.pending_link = self.allocator.dupe(u8, target) catch null;
+            }
+        }
+    }
+
+    fn handleEditShortcuts(self: *Viewer, c: *ui.Context, buf: *ui.TextBuffer, allow_markdown: bool) bool {
+        _ = self;
+        if (c.input.key == .tab and !c.input.shift) {
+            const pos = if (c.focused_text) |ft| @min(ft.caret, buf.buf.items.len) else buf.buf.items.len;
+            _ = buf.insert(pos, "  ");
+            buf.want_caret = pos + 2;
+            c.input.key = null;
+            return true;
+        }
+        const sc = c.input.shortcut orelse return false;
+        if (!sc.cmd or !allow_markdown) return false;
+
+        const marker: ?struct { open: []const u8, close: []const u8 } = switch (sc.key) {
+            'b', 'B' => .{ .open = "**", .close = "**" },
+            'i', 'I' => .{ .open = "*", .close = "*" },
+            'k', 'K' => .{ .open = "[[", .close = "]]" },
+            else => null,
+        };
+        const m = marker orelse return false;
+        c.input.shortcut = null;
+
+        const len = buf.buf.items.len;
+        const a = if (c.focused_text) |ft| @min(ft.caret, len) else len;
+        const b = if (c.focused_text) |ft| @min(ft.anchor, len) else len;
+        const lo = @min(a, b);
+        const hi = @max(a, b);
+        _ = buf.insert(hi, m.close);
+        _ = buf.insert(lo, m.open);
+        buf.want_caret = if (lo == hi) lo + m.open.len else hi + m.open.len + m.close.len;
+        return true;
     }
 
     fn renderRead(self: *Viewer, c: *ui.Context, name: []const u8, text: []const u8) void {
         if (markdown.isMarkdownFile(name)) {
             markdown.view(c, text);
+            self.renderLinkChips(c, text, 0);
             return;
         }
 

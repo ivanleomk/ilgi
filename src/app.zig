@@ -28,6 +28,12 @@ pub const State = struct {
         self.sidebar.view(c);
         ui.div(c).w(1).hFull().bg(c.theme.border).end();
 
+        if (self.viewer.pending_link) |target| {
+            self.sidebar.openLink(target);
+            self.viewer.allocator.free(target);
+            self.viewer.pending_link = null;
+        }
+
         if (self.sidebar.selected_dir != null and self.sidebar.selected_name != null) {
             self.viewer.open(self.sidebar.selected_dir.?, self.sidebar.selected_name.?);
         } else {
