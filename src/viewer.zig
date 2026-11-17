@@ -195,12 +195,12 @@ pub const Viewer = struct {
         const next_id = self.renderBlockSlice(c, src[0..r.start], 0, 0);
 
         ui.key(c, "active-md-block");
-        const active_size = blockFontSize(self.block_buf.buf.items);
+        const is_fenced = std.mem.startsWith(u8, std.mem.trimStart(u8, self.block_buf.buf.items, " \t"), "```");
         const res = ui.textArea(c, &self.block_buf, .{
             .width = .fill,
-            .size = active_size,
+            .size = blockFontSize(self.block_buf.buf.items),
             .max_lines = 64,
-            .submit_on_return = false,
+            .submit_on_return = !is_fenced,
             .bare = true,
         });
         if (res.changed) {
@@ -208,6 +208,14 @@ pub const Viewer = struct {
             _ = self.edit_buf.replace(r.start, r.end, new_text);
             self.active_range.end = r.start + new_text.len;
             self.dirty = true;
+        }
+        if (res.submitted) {
+            // Commit this block (formatting it immediately) and open a new block on the next line.
+            const insert_at = self.active_range.end;
+            _ = self.edit_buf.insert(insert_at, "\n");
+            self.editBlock(.{ .start = insert_at + 1, .end = insert_at + 1 });
+            self.dirty = true;
+            return;
         }
 
         _ = self.renderBlockSlice(c, src[self.active_range.end..], self.active_range.end, next_id);
