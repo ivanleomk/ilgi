@@ -76,4 +76,9 @@ test "Viewer Live Preview state machine: open, block focus, fenced code, save, a
     t.settle(0.1);
     try std.testing.expect(!h.viewer.editing_block);
     try std.testing.expect(t.hasText("Heading Updated"));
+
+    // 7. Opening an empty Markdown file immediately activates block 0 for typing.
+    try tmp.dir.writeFile(io, .{ .sub_path = "empty.md", .data = "" });
+    h.viewer.open(tmp_path, "empty.md");
+    try std.testing.expect(h.viewer.editing_block);
 }

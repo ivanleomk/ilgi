@@ -121,7 +121,12 @@ pub const Viewer = struct {
             _ = self.edit_buf.insert(0, text);
             self.editing_block = false;
             self.dirty = false;
-            if (!markdown.isMarkdownFile(self.file_name orelse "")) self.edit_buf.focus();
+            const is_md = markdown.isMarkdownFile(self.file_name orelse "");
+            if (is_md and text.len == 0) {
+                self.editBlock(.{ .start = 0, .end = 0 });
+            } else if (!is_md) {
+                self.edit_buf.focus();
+            }
         }
         self.mode = .edit;
     }
@@ -212,7 +217,15 @@ pub const Viewer = struct {
         defer col.end();
 
         if (!self.editing_block) {
-            _ = self.renderBlockSlice(c, src, 0, 0);
+            const count = self.renderBlockSlice(c, src, 0, 0);
+            if (count == 0) {
+                const ph = ui.div(c).wFull().py(4).control();
+                {
+                    defer ph.end();
+                    ui.text(c, "Start writing...", .{ .size = 13, .color = c.theme.muted });
+                }
+                if (ph.clicked()) self.editBlock(.{ .start = 0, .end = 0 });
+            }
             return;
         }
 
