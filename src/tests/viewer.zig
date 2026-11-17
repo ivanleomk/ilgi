@@ -128,4 +128,14 @@ test "Viewer shortcuts: Tab inserts 4 spaces, Esc exits block, Cmd+B/I/K wrap, C
     t.textOps(&.{.{ .command = .cancel }});
     t.settle(0.1);
     try std.testing.expect(!h.viewer.editing_block);
+
+    // 5. LinkQuery detects unclosed `[[` and `[label](` under caret.
+    const q = viewer_mod.findLinkQuery("See [[sam", 9).?;
+    try std.testing.expectEqualStrings("sam", q.query);
+    try std.testing.expect(q.is_wiki);
+    const md_q = viewer_mod.findLinkQuery("Open [note](hel", 15).?;
+    try std.testing.expectEqualStrings("hel", md_q.query);
+    try std.testing.expect(!md_q.is_wiki);
+    try std.testing.expect(viewer_mod.findLinkQuery("See [[done]] ok", 15) == null);
+    try std.testing.expect(viewer_mod.findLinkQuery("Open [n](a.md) ok", 17) == null);
 }

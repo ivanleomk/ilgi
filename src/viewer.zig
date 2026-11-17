@@ -28,6 +28,7 @@ pub const Viewer = struct {
     active_range: markdown.BlockRange = .{ .start = 0, .end = 0 },
     block_buf: ui.TextBuffer = .{},
     pending_link: ?[]const u8 = null,
+    note_names: []const []const u8 = &.{},
     last_caret: usize = 0,
     last_anchor: usize = 0,
 
@@ -256,6 +257,7 @@ pub const Viewer = struct {
         const block_text = self.block_buf.buf.items;
         const is_fenced = std.mem.startsWith(u8, std.mem.trimStart(u8, block_text, " \t"), "```");
         const closed_fence = is_fenced and hasClosingFence(block_text);
+        const active_query = if (!is_fenced) findLinkQuery(block_text, @min(self.last_caret, block_text.len)) else null;
         const live_spans = if (is_fenced)
             (highlight.highlight(c.alloc(), fenceFilename(c.alloc(), block_text), block_text, c.theme.dark) catch &.{})
         else
@@ -275,6 +277,12 @@ pub const Viewer = struct {
         if (c.focused_text) |ft| {
             self.last_caret = ft.caret;
             self.last_anchor = ft.anchor;
+        }
+        if (res.submitted and active_query != null) {
+            if (self.firstLinkMatch(active_query.?.query)) |match_name| {
+                self.acceptLinkCompletion(c, r_start, active_query.?, match_name);
+                return;
+            }
         }
         const md_shortcut = self.handleMarkdownShortcuts(c, &self.block_buf);
         const new_text = self.block_buf.buf.items;
@@ -298,7 +306,63 @@ pub const Viewer = struct {
 
         const after_src = self.edit_buf.buf.items;
         const after_start = @min(self.active_range.end, after_src.len);
+        self.renderLinkAutocomplete(c, r_start);
         _ = self.renderBlockSlice(c, after_src[after_start..], after_start, next_id);
+    }
+
+    fn containsIgnoreCase(haystack: []const u8, needle: []const u8) bool {
+        if (needle.len == 0) return true;
+        if (needle.len > haystack.len) return false;
+        var i: usize = 0;
+        while (i + needle.len <= haystack.len) : (i += 1) {
+            if (std.ascii.eqlIgnoreCase(haystack[i .. i + needle.len], needle)) return true;
+        }
+        return false;
+    }
+
+    fn firstLinkMatch(self: *const Viewer, query: []const u8) ?[]const u8 {
+        for (self.note_names) |name| {
+            if (containsIgnoreCase(name, query)) return name;
+        }
+        return null;
+    }
+
+    fn acceptLinkCompletion(self: *Viewer, c: *ui.Context, r_start: usize, q: LinkQuery, name: []const u8) void {
+        const rep = if (q.is_wiki) c.print("{s}]]", .{name}) else c.print("{s}.md)", .{name});
+        _ = self.block_buf.replace(q.start, q.end, rep);
+        self.block_buf.want_caret = q.start + rep.len;
+        self.block_buf.focus();
+        const updated = self.block_buf.buf.items;
+        _ = self.edit_buf.replace(r_start, self.active_range.end, updated);
+        self.active_range.end = r_start + updated.len;
+        self.dirty = true;
+    }
+
+    fn renderLinkAutocomplete(self: *Viewer, c: *ui.Context, r_start: usize) void {
+        if (self.note_names.len == 0) return;
+        const text = self.block_buf.buf.items;
+        const q = findLinkQuery(text, @min(self.last_caret, text.len)) orelse return;
+
+        var matches: [6][]const u8 = undefined;
+        var count: usize = 0;
+        for (self.note_names) |name| {
+            if (containsIgnoreCase(name, q.query)) {
+                matches[count] = name;
+                count += 1;
+                if (count == matches.len) break;
+            }
+        }
+        if (count == 0) return;
+
+        const popup = ui.div(c).column().w(240).bg(c.theme.surface).border(c.theme.border).borderW(1).rounded(8).p(4).gap(2);
+        defer popup.end();
+        for (matches[0..count], 0..) |name, mi| {
+            ui.keyInt(c, 700_000 + mi);
+            if (kit.button(c, name, .{ .variant = .ghost, .size = .xs, .full_width = true, .icon = "doc.text" }).clicked) {
+                self.acceptLinkCompletion(c, r_start, q, name);
+                return;
+            }
+        }
     }
 
     /// Deletes an empty active block's preceding newline and moves focus to the previous block.
@@ -458,6 +522,37 @@ pub const Viewer = struct {
         self.spans_ready = true;
     }
 };
+
+pub const LinkQuery = struct {
+    start: usize,
+    end: usize,
+    query: []const u8,
+    is_wiki: bool,
+};
+
+/// Returns the active `[[query` or `[label](query` under `caret`.
+pub fn findLinkQuery(src: []const u8, caret: usize) ?LinkQuery {
+    const end = @min(caret, src.len);
+    const slice = src[0..end];
+
+    if (std.mem.lastIndexOf(u8, slice, "](")) |open_md| {
+        const after = open_md + 2;
+        if (std.mem.indexOfScalarPos(u8, slice, after, ')') == null and
+            std.mem.indexOfScalarPos(u8, slice, after, '\n') == null)
+        {
+            return .{ .start = after, .end = end, .query = slice[after..end], .is_wiki = false };
+        }
+    }
+    if (std.mem.lastIndexOf(u8, slice, "[[")) |open_wiki| {
+        const after = open_wiki + 2;
+        if (std.mem.indexOfPos(u8, slice, after, "]]") == null and
+            std.mem.indexOfScalarPos(u8, slice, after, '\n') == null)
+        {
+            return .{ .start = after, .end = end, .query = slice[after..end], .is_wiki = true };
+        }
+    }
+    return null;
+}
 
 fn isEscape(c: *const ui.Context) bool {
     if (c.input.key == .escape) return true;
