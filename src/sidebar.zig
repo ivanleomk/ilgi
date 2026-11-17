@@ -115,7 +115,9 @@ pub const Sidebar = struct {
         for (self.rows.items, 0..) |row, i| {
             if (row.is_dir) continue;
             const stem = std.fs.path.stem(row.name);
-            if (std.ascii.eqlIgnoreCase(row.name, clean) or std.ascii.eqlIgnoreCase(stem, clean)) {
+            if (std.ascii.eqlIgnoreCase(row.name, clean) or std.ascii.eqlIgnoreCase(stem, clean) or
+                (std.mem.indexOfScalar(u8, clean, '/') != null and std.mem.endsWith(u8, row.full_path, clean)))
+            {
                 self.selectRow(i);
                 return;
             }

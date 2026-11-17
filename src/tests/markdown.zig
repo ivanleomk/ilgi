@@ -57,4 +57,11 @@ test "markdown.liveSpans styles bold, italic, inline code, and wikilinks inside 
     defer alloc.free(links);
     try std.testing.expectEqual(@as(usize, 1), links.len);
     try std.testing.expectEqualStrings("Page", links[0]);
+
+    const md_raw = "Visit [Zig](https://ziglang.org) and ![pic](a.png)";
+    const md_links = try markdown.extractMarkdownLinks(alloc, md_raw);
+    defer alloc.free(md_links);
+    try std.testing.expectEqual(@as(usize, 1), md_links.len);
+    try std.testing.expectEqualStrings("Zig", md_links[0].label);
+    try std.testing.expectEqualStrings("https://ziglang.org", md_links[0].url);
 }

@@ -49,6 +49,35 @@ pub fn splitBlocks(allocator: std.mem.Allocator, src: []const u8) ![]BlockRange 
     return out.toOwnedSlice(allocator);
 }
 
+pub const MdLink = struct {
+    label: []const u8,
+    url: []const u8,
+};
+
+/// Extracts all `[label](url)` Markdown links from `src` (ignoring `![alt](img)`).
+pub fn extractMarkdownLinks(allocator: std.mem.Allocator, src: []const u8) ![]const MdLink {
+    var links: std.ArrayList(MdLink) = .empty;
+    errdefer links.deinit(allocator);
+    var i: usize = 0;
+    while (i + 3 < src.len) {
+        if (src[i] == '[' and (i == 0 or src[i - 1] != '!') and src[i + 1] != '[') {
+            if (std.mem.indexOfPos(u8, src, i + 1, "](")) |mid| {
+                if (std.mem.indexOfScalarPos(u8, src, mid + 2, ')')) |close| {
+                    const label = std.mem.trim(u8, src[i + 1 .. mid], " \t");
+                    const url = std.mem.trim(u8, src[mid + 2 .. close], " \t");
+                    if (label.len > 0 and url.len > 0) {
+                        try links.append(allocator, .{ .label = label, .url = url });
+                    }
+                    i = close + 1;
+                    continue;
+                }
+            }
+        }
+        i += 1;
+    }
+    return links.toOwnedSlice(allocator);
+}
+
 /// Extracts all `[[target]]` wikilink targets from `src`.
 pub fn extractLinks(allocator: std.mem.Allocator, src: []const u8) ![]const []const u8 {
     var links: std.ArrayList([]const u8) = .empty;
@@ -90,6 +119,19 @@ pub fn liveSpans(
     }
 
     while (i < src.len) {
+        if (src[i] == '[' and (i == 0 or src[i - 1] != '!') and (i + 1 >= src.len or src[i + 1] != '[')) {
+            if (std.mem.indexOfPos(u8, src, i + 1, "](")) |mid| {
+                if (std.mem.indexOfScalarPos(u8, src, mid + 2, ')')) |close| {
+                    if (mid > i + 1 and close > mid + 2) {
+                        try spans.append(allocator, .{ .start = @intCast(i), .end = @intCast(i + 1), .color = muted });
+                        try spans.append(allocator, .{ .start = @intCast(i + 1), .end = @intCast(mid), .color = accent, .underline = true });
+                        try spans.append(allocator, .{ .start = @intCast(mid), .end = @intCast(close + 1), .color = muted });
+                        i = close + 1;
+                        continue;
+                    }
+                }
+            }
+        }
         if (i + 1 < src.len and src[i] == '[' and src[i + 1] == '[') {
             if (std.mem.indexOfPos(u8, src, i + 2, "]]")) |close| {
                 if (close > i + 2) {
@@ -138,6 +180,121 @@ pub fn liveSpans(
         i += 1;
     }
     return spans.toOwnedSlice(allocator);
+}
+
+pub const InlineLink = struct {
+    start: u32,
+    end: u32,
+    target: []const u8,
+};
+
+pub const InlineRich = struct {
+    rich: ui.markdown.Rich,
+    links: []const InlineLink,
+};
+
+/// Strips inline Markdown markers (`[label](url)`, `[[wiki]]`, `` `code` ``,
+/// `**bold**`, `*italic*`) and returns the display text, `ui.Span`s, and link ranges.
+pub fn parseInlineWithLinks(
+    allocator: std.mem.Allocator,
+    src: []const u8,
+    code_bg: ui.Color,
+    accent: ui.Color,
+) !InlineRich {
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(allocator);
+    var spans: std.ArrayList(ui.Span) = .empty;
+    errdefer spans.deinit(allocator);
+    var links: std.ArrayList(InlineLink) = .empty;
+    errdefer links.deinit(allocator);
+
+    var i: usize = 0;
+    while (i < src.len) {
+        if (src[i] == '[' and (i == 0 or src[i - 1] != '!') and (i + 1 >= src.len or src[i + 1] != '[')) {
+            if (std.mem.indexOfPos(u8, src, i + 1, "](")) |mid| {
+                if (std.mem.indexOfScalarPos(u8, src, mid + 2, ')')) |close| {
+                    if (mid > i + 1 and close > mid + 2) {
+                        const start: u32 = @intCast(out.items.len);
+                        try out.appendSlice(allocator, src[i + 1 .. mid]);
+                        const end: u32 = @intCast(out.items.len);
+                        try spans.append(allocator, .{ .start = start, .end = end, .color = accent, .underline = true });
+                        try links.append(allocator, .{ .start = start, .end = end, .target = std.mem.trim(u8, src[mid + 2 .. close], " \t") });
+                        i = close + 1;
+                        continue;
+                    }
+                }
+            }
+        }
+        if (i + 1 < src.len and src[i] == '[' and src[i + 1] == '[') {
+            if (std.mem.indexOfPos(u8, src, i + 2, "]]")) |close| {
+                if (close > i + 2) {
+                    const start: u32 = @intCast(out.items.len);
+                    try out.appendSlice(allocator, src[i + 2 .. close]);
+                    const end: u32 = @intCast(out.items.len);
+                    try spans.append(allocator, .{ .start = start, .end = end, .color = accent, .underline = true });
+                    try links.append(allocator, .{ .start = start, .end = end, .target = std.mem.trim(u8, src[i + 2 .. close], " \t") });
+                    i = close + 2;
+                    continue;
+                }
+            }
+        }
+        if (src[i] == '`' and i + 1 < src.len) {
+            if (std.mem.indexOfScalarPos(u8, src, i + 1, '`')) |close| {
+                if (close > i + 1) {
+                    const start: u32 = @intCast(out.items.len);
+                    try out.appendSlice(allocator, src[i + 1 .. close]);
+                    try spans.append(allocator, .{ .start = start, .end = @intCast(out.items.len), .mono = true, .background = code_bg });
+                    i = close + 1;
+                    continue;
+                }
+            }
+        }
+        if (i + 1 < src.len and ((src[i] == '*' and src[i + 1] == '*') or (src[i] == '_' and src[i + 1] == '_'))) {
+            const marker = src[i .. i + 2];
+            if (std.mem.indexOfPos(u8, src, i + 2, marker)) |close| {
+                if (close > i + 2) {
+                    const start: u32 = @intCast(out.items.len);
+                    try out.appendSlice(allocator, src[i + 2 .. close]);
+                    try spans.append(allocator, .{ .start = start, .end = @intCast(out.items.len), .weight = .bold });
+                    i = close + 2;
+                    continue;
+                }
+            }
+        }
+        if ((src[i] == '*' or src[i] == '_') and i + 1 < src.len and src[i + 1] != ' ') {
+            if (std.mem.indexOfScalarPos(u8, src, i + 1, src[i])) |close| {
+                if (close > i + 1) {
+                    const start: u32 = @intCast(out.items.len);
+                    try out.appendSlice(allocator, src[i + 1 .. close]);
+                    try spans.append(allocator, .{ .start = start, .end = @intCast(out.items.len), .italic = true });
+                    i = close + 1;
+                    continue;
+                }
+            }
+        }
+        try out.append(allocator, src[i]);
+        i += 1;
+    }
+    return .{
+        .rich = .{
+            .text = try out.toOwnedSlice(allocator),
+            .spans = try spans.toOwnedSlice(allocator),
+        },
+        .links = try links.toOwnedSlice(allocator),
+    };
+}
+
+/// Strips inline Markdown markers (`[label](url)`, `[[wiki]]`, `` `code` ``,
+/// `**bold**`, `*italic*`) and returns the display text with matching `ui.Span`s.
+pub fn parseInline(
+    allocator: std.mem.Allocator,
+    src: []const u8,
+    code_bg: ui.Color,
+    accent: ui.Color,
+) !ui.markdown.Rich {
+    const res = try parseInlineWithLinks(allocator, src, code_bg, accent);
+    allocator.free(res.links);
+    return res.rich;
 }
 
 /// Renders `src` as formatted Markdown blocks inside a vertical column.
@@ -227,10 +384,13 @@ fn codeBlockView(c: *ui.Context, lang: []const u8, code: []const u8) void {
 }
 
 fn richLine(c: *ui.Context, text: []const u8, style: ui.TextStyle) void {
-    // If the line has `[[wikilinks]]`, render with live-style spans so `[[` `]]` dim and targets underline.
-    if (std.mem.indexOf(u8, text, "[[") != null) {
-        const spans = liveSpans(c.alloc(), text, c.theme.muted, c.theme.surface_hover, c.theme.accent) catch &.{};
-        ui.richText(c, text, spans, style);
+    // If the line has `[[wikilinks]]` or `[label](url)`, strip markers and style links + bold/italic/code.
+    if (std.mem.indexOf(u8, text, "[[") != null or std.mem.indexOf(u8, text, "](") != null) {
+        const rich = parseInline(c.alloc(), text, c.theme.surface_hover, c.theme.accent) catch {
+            ui.text(c, text, style);
+            return;
+        };
+        ui.richText(c, rich.text, rich.spans, style);
         return;
     }
     const rich = ui.markdown.parse(c.alloc(), text, .{}) catch {
