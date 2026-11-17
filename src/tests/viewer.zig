@@ -139,3 +139,65 @@ test "Viewer shortcuts: Tab inserts 4 spaces, Esc exits block, Cmd+B/I/K wrap, C
     try std.testing.expect(viewer_mod.findLinkQuery("See [[done]] ok", 15) == null);
     try std.testing.expect(viewer_mod.findLinkQuery("Open [n](a.md) ok", 17) == null);
 }
+
+test "Link autocomplete: Up/Down navigates, Enter accepts selected item, Esc closes only popup" {
+    const alloc = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.writeFile(io, .{ .sub_path = "note.md", .data = "See [ref](sam" });
+    const dir_path = try tmp.dir.realPathFileAlloc(io, ".", alloc);
+    defer alloc.free(dir_path);
+
+    var viewer = viewer_mod.Viewer.init(alloc, io);
+    defer viewer.deinit();
+    const entries = [_]viewer_mod.NoteEntry{
+        .{ .name = "sample.js", .full_path = "" },
+        .{ .name = "sample.md", .full_path = "" },
+        .{ .name = "sample.py", .full_path = "" },
+    };
+    viewer.note_entries = &entries;
+    viewer.open(dir_path, "note.md");
+    viewer.editBlock(.{ .start = 0, .end = "See [ref](sam".len });
+    viewer.block_buf.want_caret = "See [ref](sam".len;
+    viewer.last_caret = "See [ref](sam".len;
+    viewer.last_anchor = viewer.last_caret;
+
+    const Harness = struct {
+        viewer: *viewer_mod.Viewer,
+        fn view(h: *@This(), c: *ui.Context) void {
+            h.viewer.view(c);
+        }
+    };
+    var h: Harness = .{ .viewer = &viewer };
+    var t: ui.Tester = undefined;
+    try t.init(alloc, .init(&h, Harness.view), .{ .width = 800, .height = 600 });
+    defer t.deinit();
+    t.settle(0.1);
+
+    // Down arrow moves selection from 0 (sample.js) -> 1 (sample.md).
+    t.key(.down);
+    t.settle(0.1);
+    try std.testing.expectEqual(@as(usize, 1), viewer.ac_index);
+
+    // Up arrow wraps back from 1 -> 0, then Up again wraps to 2 (sample.py).
+    t.key(.up);
+    t.key(.up);
+    t.settle(0.1);
+    try std.testing.expectEqual(@as(usize, 2), viewer.ac_index);
+
+    // Esc closes ONLY the autocomplete popup while keeping editing_block open.
+    t.key(.escape);
+    t.settle(0.1);
+    try std.testing.expect(viewer.editing_block);
+    try std.testing.expect(viewer.ac_dismissed_start != null);
+
+    // Re-open autocomplete by clearing dismissal, then Down -> 1 and Enter accepts sample.md.
+    viewer.ac_dismissed_start = null;
+    viewer.ac_index = 1;
+    t.settle(0.1);
+    t.key(.enter);
+    t.settle(0.1);
+    try std.testing.expectEqualStrings("See [ref](sample.md)", viewer.block_buf.buf.items);
+}

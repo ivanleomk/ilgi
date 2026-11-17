@@ -34,6 +34,8 @@ pub const Viewer = struct {
     block_buf: ui.TextBuffer = .{},
     pending_link: ?[]const u8 = null,
     note_entries: []const NoteEntry = &.{},
+    ac_index: usize = 0,
+    ac_dismissed_start: ?usize = null,
     last_caret: usize = 0,
     last_anchor: usize = 0,
 
@@ -224,6 +226,34 @@ pub const Viewer = struct {
         const col = ui.div(c).column().wFull().gap(10);
         defer col.end();
 
+        const ac_block_text = self.block_buf.buf.items;
+        const ac_is_fenced = self.editing_block and std.mem.startsWith(u8, std.mem.trimStart(u8, ac_block_text, " \t"), "```");
+        const pre_ac_query = if (self.editing_block and !ac_is_fenced)
+            findLinkQuery(ac_block_text, @min(self.last_caret, ac_block_text.len))
+        else
+            null;
+        var ac_matches: [6]NoteEntry = undefined;
+        const ac_count = if (pre_ac_query) |q| self.collectLinkMatches(q.query, &ac_matches) else 0;
+        const ac_open = pre_ac_query != null and ac_count > 0 and self.ac_dismissed_start != pre_ac_query.?.start;
+        if (pre_ac_query == null) {
+            self.ac_dismissed_start = null;
+            self.ac_index = 0;
+        } else if (ac_open) {
+            if (isEscape(c)) {
+                c.input.key = null;
+                c.input.ops = &.{};
+                self.ac_dismissed_start = pre_ac_query.?.start;
+            } else if (c.shortcut(.{ .key = ui.Shortcut.down }) or c.shortcut(.{ .key = 'n', .ctrl = true }) or c.input.key == .down) {
+                c.input.key = null;
+                c.input.ops = &.{};
+                self.ac_index = (self.ac_index + 1) % ac_count;
+            } else if (c.shortcut(.{ .key = ui.Shortcut.up }) or c.shortcut(.{ .key = 'p', .ctrl = true }) or c.input.key == .up) {
+                c.input.key = null;
+                c.input.ops = &.{};
+                self.ac_index = if (self.ac_index == 0) ac_count - 1 else self.ac_index - 1;
+            }
+        }
+
         if (self.editing_block and isEscape(c)) {
             c.input.key = null;
             c.input.ops = &.{};
@@ -283,9 +313,13 @@ pub const Viewer = struct {
             self.last_caret = ft.caret;
             self.last_anchor = ft.anchor;
         }
-        if (res.submitted and active_query != null) {
-            if (self.firstLinkMatch(active_query.?.query)) |match_name| {
-                self.acceptLinkCompletion(c, r_start, active_query.?, match_name);
+        if (res.submitted and active_query != null and self.ac_dismissed_start != active_query.?.start) {
+            var sub_matches: [6]NoteEntry = undefined;
+            const sub_count = self.collectLinkMatches(active_query.?.query, &sub_matches);
+            if (sub_count > 0) {
+                const chosen = sub_matches[@min(self.ac_index, sub_count - 1)];
+                self.ac_index = 0;
+                self.acceptLinkCompletion(c, r_start, active_query.?, chosen);
                 return;
             }
         }
@@ -325,11 +359,16 @@ pub const Viewer = struct {
         return false;
     }
 
-    fn firstLinkMatch(self: *const Viewer, query: []const u8) ?NoteEntry {
+    fn collectLinkMatches(self: *const Viewer, query: []const u8, out: *[6]NoteEntry) usize {
+        var count: usize = 0;
         for (self.note_entries) |entry| {
-            if (containsIgnoreCase(entry.name, query)) return entry;
+            if (containsIgnoreCase(entry.name, query)) {
+                out[count] = entry;
+                count += 1;
+                if (count == out.len) break;
+            }
         }
-        return null;
+        return count;
     }
 
     fn acceptLinkCompletion(self: *Viewer, c: *ui.Context, r_start: usize, q: LinkQuery, entry: NoteEntry) void {
@@ -344,6 +383,7 @@ pub const Viewer = struct {
     }
 
     fn readSnippet(self: *const Viewer, alloc: std.mem.Allocator, full_path: []const u8) []const u8 {
+        if (!std.fs.path.isAbsolute(full_path)) return "";
         const file = std.Io.Dir.openFileAbsolute(self.io, full_path, .{}) catch return "";
         defer file.close(self.io);
         var buf: [256]u8 = undefined;
@@ -366,17 +406,12 @@ pub const Viewer = struct {
         if (self.note_entries.len == 0) return;
         const text = self.block_buf.buf.items;
         const q = findLinkQuery(text, @min(self.last_caret, text.len)) orelse return;
+        if (self.ac_dismissed_start == q.start) return;
 
         var matches: [6]NoteEntry = undefined;
-        var count: usize = 0;
-        for (self.note_entries) |entry| {
-            if (containsIgnoreCase(entry.name, q.query)) {
-                matches[count] = entry;
-                count += 1;
-                if (count == matches.len) break;
-            }
-        }
+        const count = self.collectLinkMatches(q.query, &matches);
         if (count == 0) return;
+        const sel = @min(self.ac_index, count - 1);
 
         const caret = if (c.focused_text) |ft| ft.caret_rect else ui.Rect{ .x = 24, .y = 80, .w = 2, .h = 18 };
         const popup_w: f32 = 300;
@@ -390,13 +425,13 @@ pub const Viewer = struct {
         for (matches[0..count], 0..) |entry, mi| {
             ui.keyInt(c, 700_000 + mi);
             var row_div = ui.div(c).column().wFull().px(8).py(5).rounded(6).gap(1);
-            row_div = if (mi == 0) row_div.bg(c.theme.surface_hover).control() else row_div.hover(c.theme.surface_hover).control();
+            row_div = if (mi == sel) row_div.bg(c.theme.surface_hover).control() else row_div.hover(c.theme.surface_hover).control();
             {
                 defer row_div.end();
                 const top = ui.div(c).row().wFull().itemsCenter().gap(6);
                 {
                     defer top.end();
-                    ui.icon(c, "doc.text", .{ .size = 12, .color = if (mi == 0) c.theme.accent else c.theme.muted });
+                    ui.icon(c, "doc.text", .{ .size = 12, .color = if (mi == sel) c.theme.accent else c.theme.muted });
                     ui.text(c, std.fs.path.stem(entry.name), .{ .size = 12.5, .weight = .medium, .color = c.theme.text, .truncate = .ellipsis });
                     ui.spacer(c);
                     const ext = std.fs.path.extension(entry.name);
@@ -410,6 +445,7 @@ pub const Viewer = struct {
                 }
             }
             if (row_div.clicked()) {
+                self.ac_index = 0;
                 self.acceptLinkCompletion(c, r_start, q, entry);
                 return;
             }
