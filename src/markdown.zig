@@ -360,10 +360,10 @@ pub fn view(c: *ui.Context, src: []const u8) void {
 
         // List item (- / * / 1. / a. / A.)
         if (parseListPrefix(raw_line)) |li| {
-            const pad_l: f32 = @floatFromInt(8 + li.depth * 16);
-            const item = ui.div(c).row().wFull().pl(pad_l).gap(8);
+            const pad_l: f32 = @floatFromInt(li.depth * 16);
+            const item = ui.div(c).row().wFull().pl(pad_l).gap(6);
             defer item.end();
-            ui.text(c, li.marker, .{ .size = 13, .color = c.theme.muted });
+            ui.text(c, li.marker, .{ .size = 13, .color = c.theme.muted, .leading = 1.45 });
             const body = ui.div(c).grow();
             defer body.end();
             richLine(c, li.body, .{ .size = 13, .wrap = true, .leading = 1.45 });
