@@ -83,10 +83,10 @@ test "Sidebar renders per-folder collapsible trees and previews selected file" {
     try std.testing.expect(t.hasText("sub"));
     try std.testing.expect(t.hasText("new.md"));
 
-    // Switch to Edit (Live Preview) on hello.md, edit block 0, save, and verify.
+    // Clicking hello.md opens directly in Edit (Live Preview) mode; edit block 0, save, and verify.
     state.sidebar.selectRow(2);
     t.settle(0.1);
-    state.viewer.setMode(.edit);
+    try std.testing.expectEqual(@import("viewer.zig").ViewMode.edit, state.viewer.mode);
     const blocks = try @import("markdown.zig").splitBlocks(alloc, state.viewer.edit_buf.buf.items);
     defer alloc.free(blocks);
     state.viewer.editBlock(blocks[0]);
