@@ -35,7 +35,8 @@ pub const Sidebar = struct {
     selected_dir: ?[]const u8 = null,
     selected_name: ?[]const u8 = null,
 
-    creating_kind: ?enum { file, folder } = null,
+    creating_kind: enum { file, folder } = .file,
+    creating_in: ?[]const u8 = null,
     new_name_buf: ui.TextBuffer = .{},
 
     pub fn init(allocator: std.mem.Allocator, io: std.Io, config_path: []const u8) Sidebar {
@@ -55,6 +56,7 @@ pub const Sidebar = struct {
     }
 
     pub fn deinit(self: *Sidebar) void {
+        if (self.creating_in) |p| self.allocator.free(p);
         self.new_name_buf.deinit();
         self.clearSelection();
         var it = self.expanded.keyIterator();
@@ -169,40 +171,8 @@ pub const Sidebar = struct {
         {
             defer header.end();
             ui.text(c, "Ilgi", .{ .size = 15, .weight = .bold });
-            const actions = ui.div(c).row().itemsCenter().gap(2);
-            defer actions.end();
-            if (self.config.folders.items.len > 0) {
-                if (kit.iconButton(c, "doc.badge.plus", .{ .size = .sm, .tooltip = "New file" }).clicked) {
-                    self.startCreate(.file);
-                }
-                if (kit.iconButton(c, "folder.badge.plus", .{ .size = .sm, .tooltip = "New folder" }).clicked) {
-                    self.startCreate(.folder);
-                }
-            }
             if (kit.iconButton(c, "plus", .{ .size = .sm, .tooltip = "Add folder" }).clicked) {
                 self.pickFolder();
-            }
-        }
-
-        if (self.creating_kind) |kind| {
-            const box = ui.div(c).row().wFull().px(8).pb(8).itemsCenter().gap(4);
-            defer box.end();
-            const ph = if (kind == .file) "note.md" else "folder-name";
-            const res = ui.textField(c, &self.new_name_buf, .{ .placeholder = ph, .width = .fill, .size = 12.5 });
-            if (res.submitted) {
-                const target_dir = self.selected_dir orelse self.config.folders.items[0].path;
-                const name = self.new_name_buf.buf.items;
-                if (kind == .file) {
-                    self.createFile(target_dir, name) catch {};
-                } else {
-                    self.createFolder(target_dir, name) catch {};
-                }
-                self.creating_kind = null;
-                self.new_name_buf.clear();
-            }
-            if (kit.iconButton(c, "xmark", .{ .size = .xs, .tooltip = "Cancel" }).clicked) {
-                self.creating_kind = null;
-                self.new_name_buf.clear();
             }
         }
 
@@ -223,53 +193,92 @@ pub const Sidebar = struct {
             const indent: f32 = @as(f32, @floatFromInt(row.depth)) * 16 + 8;
 
             const outer = ui.div(c).row().wFull().itemsCenter().gap(2);
-            defer outer.end();
-
-            var btn = ui.div(c).row().grow().pl(indent).pr(8).py(4).rounded(6).itemsCenter().gap(6).control();
-            btn = if (selected) btn.bg(c.theme.accent) else btn.hover(c.theme.surface_hover);
             {
-                defer btn.end();
-                const fg = if (selected) c.theme.accent_text else c.theme.text;
-                const icon_fg = if (selected) c.theme.accent_text else c.theme.muted;
+                defer outer.end();
 
-                if (row.is_dir) {
-                    ui.icon(c, if (row.expanded) "chevron.down" else "chevron.right", .{ .size = 10, .frame = 14, .color = icon_fg });
-                    ui.icon(c, if (row.is_root) "folder.fill" else "folder", .{ .size = 13, .color = if (row.is_root) c.theme.accent else icon_fg });
-                } else {
-                    // Align file icons with the parent folder's icon (past the 14px chevron).
-                    ui.div(c).w(14).end();
-                    ui.icon(c, "doc.text", .{ .size = 12.5, .color = icon_fg });
-                }
+                var btn = ui.div(c).row().grow().pl(indent).pr(8).py(4).rounded(6).itemsCenter().gap(6).control();
+                btn = if (selected) btn.bg(c.theme.surface_hover) else btn.hover(c.theme.surface_hover);
+                {
+                    defer btn.end();
+                    const fg = if (selected) c.theme.accent else c.theme.text;
+                    const icon_fg = if (selected) c.theme.accent else c.theme.muted;
 
-                const nb = ui.div(c).grow().clip();
-                defer nb.end();
-                ui.text(c, row.name, .{
-                    .size = 13,
-                    .weight = if (row.is_root) .semibold else .regular,
-                    .color = fg,
-                    .truncate = .ellipsis,
-                });
-            }
-
-            if (btn.clicked()) {
-                self.selectRow(i);
-                return;
-            }
-            if (row.is_root and kit.iconButton(c, "xmark", .{ .size = .xs, .tooltip = "Remove folder" }).clicked) {
-                if (self.config.removeFolder(row.full_path)) {
-                    self.config.save(self.io, self.config_path) catch {};
-                    self.setExpanded(row.full_path, false);
-                    if (self.selected_dir) |sd| {
-                        if (std.mem.startsWith(u8, sd, row.full_path)) self.clearSelection();
+                    if (row.is_dir) {
+                        ui.icon(c, if (row.expanded) "chevron.down" else "chevron.right", .{ .size = 10, .frame = 14, .color = icon_fg });
+                        ui.icon(c, if (row.is_root) "folder.fill" else "folder", .{ .size = 13, .color = if (row.is_root) c.theme.accent else icon_fg });
+                    } else {
+                        // Align file icons with the parent folder's icon (past the 14px chevron).
+                        ui.div(c).w(14).end();
+                        ui.icon(c, "doc.text", .{ .size = 12.5, .color = icon_fg });
                     }
-                    self.rebuildTree();
+
+                    const nb = ui.div(c).grow().clip();
+                    defer nb.end();
+                    ui.text(c, row.name, .{
+                        .size = 13,
+                        .weight = if (row.is_root or selected) .semibold else .regular,
+                        .color = fg,
+                        .truncate = .ellipsis,
+                    });
                 }
-                return;
+
+                if (btn.clicked()) {
+                    self.selectRow(i);
+                    return;
+                }
+                if (row.is_dir) {
+                    if (kit.iconButton(c, "doc.badge.plus", .{ .size = .xs, .tooltip = "New file" }).clicked) {
+                        self.startCreate(row.full_path, .file);
+                        return;
+                    }
+                    if (kit.iconButton(c, "folder.badge.plus", .{ .size = .xs, .tooltip = "New folder" }).clicked) {
+                        self.startCreate(row.full_path, .folder);
+                        return;
+                    }
+                }
+                if (row.is_root and kit.iconButton(c, "xmark", .{ .size = .xs, .tooltip = "Remove folder" }).clicked) {
+                    if (self.config.removeFolder(row.full_path)) {
+                        self.config.save(self.io, self.config_path) catch {};
+                        self.setExpanded(row.full_path, false);
+                        if (self.selected_dir) |sd| {
+                            if (std.mem.startsWith(u8, sd, row.full_path)) self.clearSelection();
+                        }
+                        self.rebuildTree();
+                    }
+                    return;
+                }
+                if (!row.is_root and selected and kit.iconButton(c, "trash", .{ .size = .xs, .tooltip = "Delete" }).clicked) {
+                    self.deleteRow(i) catch {};
+                    return;
+                }
             }
-            if (!row.is_root and selected and kit.iconButton(c, "trash", .{ .size = .xs, .tooltip = "Delete" }).clicked) {
-                self.deleteRow(i) catch {};
-                return;
+
+            if (row.is_dir and self.creating_in != null and std.mem.eql(u8, self.creating_in.?, row.full_path)) {
+                self.createInputRow(c, row.full_path, row.depth + 1);
             }
+        }
+    }
+
+    fn createInputRow(self: *Sidebar, c: *ui.Context, dir_path: []const u8, depth: u16) void {
+        const indent: f32 = @as(f32, @floatFromInt(depth)) * 16 + 22;
+        const box = ui.div(c).row().wFull().pl(indent).pr(6).py(2).itemsCenter().gap(4);
+        defer box.end();
+
+        ui.icon(c, if (self.creating_kind == .file) "doc.text" else "folder", .{ .size = 12.5, .color = c.theme.accent });
+        const ph = if (self.creating_kind == .file) "note.md" else "folder-name";
+        const res = ui.textField(c, &self.new_name_buf, .{ .placeholder = ph, .width = .fill, .size = 12.5 });
+        if (res.submitted) {
+            const name = self.new_name_buf.buf.items;
+            if (self.creating_kind == .file) {
+                self.createFile(dir_path, name) catch {};
+            } else {
+                self.createFolder(dir_path, name) catch {};
+            }
+            self.cancelCreate();
+            return;
+        }
+        if (kit.iconButton(c, "xmark", .{ .size = .xs, .tooltip = "Cancel" }).clicked) {
+            self.cancelCreate();
         }
     }
 
@@ -331,10 +340,22 @@ pub const Sidebar = struct {
         }
     }
 
-    fn startCreate(self: *Sidebar, kind: @TypeOf(self.creating_kind.?)) void {
+    fn startCreate(self: *Sidebar, dir_path: []const u8, kind: @TypeOf(self.creating_kind)) void {
+        if (self.creating_in) |old| self.allocator.free(old);
+        self.creating_in = self.allocator.dupe(u8, dir_path) catch null;
         self.creating_kind = kind;
+        self.setExpanded(dir_path, true);
+        self.rebuildTree();
         self.new_name_buf.clear();
         self.new_name_buf.focus();
+    }
+
+    fn cancelCreate(self: *Sidebar) void {
+        if (self.creating_in) |old| {
+            self.allocator.free(old);
+            self.creating_in = null;
+        }
+        self.new_name_buf.clear();
     }
 
     fn pickFolder(self: *Sidebar) void {
