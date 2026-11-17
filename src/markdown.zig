@@ -182,18 +182,31 @@ pub fn liveSpans(
     return spans.toOwnedSlice(allocator);
 }
 
+pub const InlineLink = struct {
+    start: u32,
+    end: u32,
+    target: []const u8,
+};
+
+pub const InlineRich = struct {
+    rich: ui.markdown.Rich,
+    links: []const InlineLink,
+};
+
 /// Strips inline Markdown markers (`[label](url)`, `[[wiki]]`, `` `code` ``,
-/// `**bold**`, `*italic*`) and returns the display text with matching `ui.Span`s.
-pub fn parseInline(
+/// `**bold**`, `*italic*`) and returns the display text, `ui.Span`s, and link ranges.
+pub fn parseInlineWithLinks(
     allocator: std.mem.Allocator,
     src: []const u8,
     code_bg: ui.Color,
     accent: ui.Color,
-) !ui.markdown.Rich {
+) !InlineRich {
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(allocator);
     var spans: std.ArrayList(ui.Span) = .empty;
     errdefer spans.deinit(allocator);
+    var links: std.ArrayList(InlineLink) = .empty;
+    errdefer links.deinit(allocator);
 
     var i: usize = 0;
     while (i < src.len) {
@@ -203,7 +216,9 @@ pub fn parseInline(
                     if (mid > i + 1 and close > mid + 2) {
                         const start: u32 = @intCast(out.items.len);
                         try out.appendSlice(allocator, src[i + 1 .. mid]);
-                        try spans.append(allocator, .{ .start = start, .end = @intCast(out.items.len), .color = accent, .underline = true });
+                        const end: u32 = @intCast(out.items.len);
+                        try spans.append(allocator, .{ .start = start, .end = end, .color = accent, .underline = true });
+                        try links.append(allocator, .{ .start = start, .end = end, .target = std.mem.trim(u8, src[mid + 2 .. close], " \t") });
                         i = close + 1;
                         continue;
                     }
@@ -215,7 +230,9 @@ pub fn parseInline(
                 if (close > i + 2) {
                     const start: u32 = @intCast(out.items.len);
                     try out.appendSlice(allocator, src[i + 2 .. close]);
-                    try spans.append(allocator, .{ .start = start, .end = @intCast(out.items.len), .color = accent, .underline = true });
+                    const end: u32 = @intCast(out.items.len);
+                    try spans.append(allocator, .{ .start = start, .end = end, .color = accent, .underline = true });
+                    try links.append(allocator, .{ .start = start, .end = end, .target = std.mem.trim(u8, src[i + 2 .. close], " \t") });
                     i = close + 2;
                     continue;
                 }
@@ -259,9 +276,25 @@ pub fn parseInline(
         i += 1;
     }
     return .{
-        .text = try out.toOwnedSlice(allocator),
-        .spans = try spans.toOwnedSlice(allocator),
+        .rich = .{
+            .text = try out.toOwnedSlice(allocator),
+            .spans = try spans.toOwnedSlice(allocator),
+        },
+        .links = try links.toOwnedSlice(allocator),
     };
+}
+
+/// Strips inline Markdown markers (`[label](url)`, `[[wiki]]`, `` `code` ``,
+/// `**bold**`, `*italic*`) and returns the display text with matching `ui.Span`s.
+pub fn parseInline(
+    allocator: std.mem.Allocator,
+    src: []const u8,
+    code_bg: ui.Color,
+    accent: ui.Color,
+) !ui.markdown.Rich {
+    const res = try parseInlineWithLinks(allocator, src, code_bg, accent);
+    allocator.free(res.links);
+    return res.rich;
 }
 
 /// Renders `src` as formatted Markdown blocks inside a vertical column.

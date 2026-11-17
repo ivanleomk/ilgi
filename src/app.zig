@@ -41,7 +41,15 @@ pub const State = struct {
         }
         var entries: std.ArrayList(viewer_mod.NoteEntry) = .empty;
         for (self.sidebar.rows.items) |row| {
-            if (!row.is_dir) entries.append(c.alloc(), .{ .name = row.name, .full_path = row.full_path }) catch break;
+            if (row.is_dir) continue;
+            var rel: []const u8 = row.name;
+            for (self.sidebar.config.folders.items) |f| {
+                if (std.mem.startsWith(u8, row.full_path, f.path) and row.full_path.len > f.path.len + 1 and row.full_path[f.path.len] == '/') {
+                    rel = row.full_path[f.path.len + 1 ..];
+                    break;
+                }
+            }
+            entries.append(c.alloc(), .{ .name = row.name, .rel_path = rel, .full_path = row.full_path }) catch break;
         }
         self.viewer.note_entries = entries.items;
         self.viewer.view(c);

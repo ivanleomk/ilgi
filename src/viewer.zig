@@ -12,6 +12,7 @@ pub const ViewMode = enum { read, edit };
 
 pub const NoteEntry = struct {
     name: []const u8,
+    rel_path: []const u8 = "",
     full_path: []const u8,
 };
 
@@ -30,6 +31,7 @@ pub const Viewer = struct {
     edit_buf: ui.TextBuffer = .{},
     editing_block: bool = false,
     block_just_opened: bool = false,
+    block_gen: usize = 0,
     active_range: markdown.BlockRange = .{ .start = 0, .end = 0 },
     block_buf: ui.TextBuffer = .{},
     pending_link: ?[]const u8 = null,
@@ -143,8 +145,10 @@ pub const Viewer = struct {
     pub fn editBlock(self: *Viewer, range: markdown.BlockRange) void {
         self.editing_block = true;
         self.block_just_opened = true;
+        self.block_gen +%= 1;
         self.active_range = range;
-        self.block_buf.clear();
+        self.block_buf.deinit();
+        self.block_buf = .{};
         _ = self.block_buf.insert(0, self.edit_buf.buf.items[range.start..range.end]);
         self.block_buf.focus();
     }
@@ -285,7 +289,7 @@ pub const Viewer = struct {
 
         const next_id = self.renderBlockSlice(c, src[0..r_start], 0, 0);
 
-        ui.key(c, "active-md-block");
+        ui.keyInt(c, 900_000 + self.block_gen);
         const just_opened = self.block_just_opened;
         self.block_just_opened = false;
         const tab_inserted = self.handleTabKey(c, &self.block_buf);
@@ -372,7 +376,8 @@ pub const Viewer = struct {
     }
 
     fn acceptLinkCompletion(self: *Viewer, c: *ui.Context, r_start: usize, q: LinkQuery, entry: NoteEntry) void {
-        const rep = if (q.is_wiki) c.print("{s}]]", .{std.fs.path.stem(entry.name)}) else c.print("{s})", .{entry.name});
+        const target = if (entry.rel_path.len > 0) entry.rel_path else entry.name;
+        const rep = if (q.is_wiki) c.print("{s}]]", .{std.fs.path.stem(entry.name)}) else c.print("{s})", .{target});
         _ = self.block_buf.replace(q.start, q.end, rep);
         self.block_buf.want_caret = q.start + rep.len;
         self.block_buf.focus();
@@ -439,7 +444,11 @@ pub const Viewer = struct {
                         ui.text(c, ext, .{ .size = 11, .mono = true, .color = c.theme.muted });
                     }
                 }
+                const path_label = if (entry.rel_path.len > 0) entry.rel_path else entry.name;
                 const snippet = self.readSnippet(c.alloc(), entry.full_path);
+                if (!std.mem.eql(u8, path_label, entry.name)) {
+                    ui.text(c, path_label, .{ .size = 10.5, .mono = true, .color = c.theme.muted, .truncate = .ellipsis });
+                }
                 if (snippet.len > 0) {
                     ui.text(c, snippet, .{ .size = 11, .color = c.theme.muted, .truncate = .ellipsis });
                 }
@@ -479,46 +488,89 @@ pub const Viewer = struct {
             ui.keyInt(c, start_id + i);
             const block_src = slice[b.start..b.end];
             const row = ui.div(c).wFull().control();
+            const row_id = c.node(row.index).id;
             {
                 defer row.end();
                 markdown.view(c, block_src);
             }
+            const hovered_link = if (row.hovered()) self.hitTestBlockLink(c, row_id, block_src) else null;
+            if (hovered_link != null) c.cursor_hand = true;
             if (row.clicked()) {
+                if (self.hitTestBlockLink(c, row_id, block_src)) |target| {
+                    self.openTarget(target);
+                    return start_id + i + 1;
+                }
+                if (c.input.cmd and self.openFirstLink(c, block_src)) {
+                    return start_id + i + 1;
+                }
                 self.editBlock(.{ .start = base_offset + b.start, .end = base_offset + b.end });
                 return start_id + i + 1;
             }
-            self.renderLinkChips(c, block_src, start_id + i);
         }
         return start_id + blocks.len;
     }
 
-    fn renderLinkChips(self: *Viewer, c: *ui.Context, src: []const u8, seed: usize) void {
-        const wiki_links = markdown.extractLinks(c.alloc(), src) catch &.{};
-        const md_links = markdown.extractMarkdownLinks(c.alloc(), src) catch &.{};
-        if (wiki_links.len == 0 and md_links.len == 0) return;
+    fn openTarget(self: *Viewer, target: []const u8) void {
+        if (std.mem.startsWith(u8, target, "http://") or std.mem.startsWith(u8, target, "https://")) {
+            _ = nanoui.shell.openUrl(target);
+            return;
+        }
+        if (self.pending_link) |old| self.allocator.free(old);
+        self.pending_link = self.allocator.dupe(u8, target) catch null;
+    }
 
-        const bar = ui.div(c).row().wFull().gap(6).pt(2);
-        defer bar.end();
-        for (wiki_links, 0..) |target, li| {
-            ui.keyInt(c, 500_000 + seed * 32 + li);
-            const label = c.print("↗ {s}", .{target});
-            if (kit.button(c, label, .{ .variant = .ghost, .size = .xs }).clicked) {
+    fn hitTestBlockLink(self: *Viewer, c: *ui.Context, row_id: u64, block_src: []const u8) ?[]const u8 {
+        _ = self;
+        if (std.mem.indexOf(u8, block_src, "[[") == null and std.mem.indexOf(u8, block_src, "](") == null) return null;
+        const rect = c.rects.get(row_id) orelse return null;
+        if (rect.w <= 0) return null;
+
+        const parsed = markdown.parseInlineWithLinks(c.alloc(), block_src, c.theme.surface_hover, c.theme.accent) catch return null;
+        if (parsed.links.len == 0) return null;
+
+        const style: ui.TextStyle = .{ .size = 13, .wrap = true, .leading = 1.65 };
+        const lh = c.text.font(style).lineHeight() * style.leading;
+        if (lh <= 0) return null;
+        const lines = c.text.wrap(parsed.rich.text, style, rect.w);
+        if (lines.len == 0) return null;
+
+        const rel_y = c.input.mouse.y - rect.y;
+        const rel_x = c.input.mouse.x - rect.x;
+        if (rel_y < 0 or rel_x < 0) return null;
+        const line_idx: usize = @intFromFloat(@floor(rel_y / lh));
+        if (line_idx >= lines.len) return null;
+
+        const line = lines[line_idx];
+        const line_text = parsed.rich.text[line.start..line.end];
+        const line_w = c.text.caretX(line_text, style, line_text.len);
+        if (rel_x > line_w) return null;
+
+        const byte_pos = line.start + c.text.indexAt(line_text, style, rel_x);
+        for (parsed.links) |link| {
+            if (byte_pos >= link.start and byte_pos <= link.end) return link.target;
+        }
+        return null;
+    }
+
+    fn openFirstLink(self: *Viewer, c: *ui.Context, src: []const u8) bool {
+        const md_links = markdown.extractMarkdownLinks(c.alloc(), src) catch &.{};
+        if (md_links.len > 0) {
+            const url = md_links[0].url;
+            if (std.mem.startsWith(u8, url, "http://") or std.mem.startsWith(u8, url, "https://")) {
+                _ = nanoui.shell.openUrl(url);
+            } else {
                 if (self.pending_link) |old| self.allocator.free(old);
-                self.pending_link = self.allocator.dupe(u8, target) catch null;
+                self.pending_link = self.allocator.dupe(u8, url) catch null;
             }
+            return true;
         }
-        for (md_links, 0..) |link, mi| {
-            ui.keyInt(c, 600_000 + seed * 32 + mi);
-            const label = c.print("↗ {s}", .{link.label});
-            if (kit.button(c, label, .{ .variant = .ghost, .size = .xs }).clicked) {
-                if (std.mem.startsWith(u8, link.url, "http://") or std.mem.startsWith(u8, link.url, "https://")) {
-                    _ = nanoui.shell.openUrl(link.url);
-                } else {
-                    if (self.pending_link) |old| self.allocator.free(old);
-                    self.pending_link = self.allocator.dupe(u8, link.url) catch null;
-                }
-            }
+        const wiki_links = markdown.extractLinks(c.alloc(), src) catch &.{};
+        if (wiki_links.len > 0) {
+            if (self.pending_link) |old| self.allocator.free(old);
+            self.pending_link = self.allocator.dupe(u8, wiki_links[0]) catch null;
+            return true;
         }
+        return false;
     }
 
     fn handleTabKey(self: *Viewer, c: *ui.Context, buf: *ui.TextBuffer) bool {
@@ -566,7 +618,6 @@ pub const Viewer = struct {
     fn renderRead(self: *Viewer, c: *ui.Context, name: []const u8, text: []const u8) void {
         if (markdown.isMarkdownFile(name)) {
             markdown.view(c, text);
-            self.renderLinkChips(c, text, 0);
             return;
         }
 
@@ -585,7 +636,14 @@ pub const Viewer = struct {
         defer topbar.end();
 
         const title = if (self.dirty) c.print("{s} •", .{name}) else name;
-        ui.text(c, title, .{ .size = 14, .weight = .semibold });
+        const title_col = ui.div(c).column().gap(1);
+        {
+            defer title_col.end();
+            ui.text(c, title, .{ .size = 14, .weight = .semibold });
+            if (self.loaded_path) |lp| {
+                ui.text(c, lp, .{ .size = 11, .mono = true, .color = c.theme.muted, .truncate = .ellipsis });
+            }
+        }
 
         if (self.content == null) return;
         const actions = ui.div(c).row().itemsCenter().gap(4);

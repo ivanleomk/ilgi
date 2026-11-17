@@ -106,6 +106,9 @@ test "Viewer shortcuts: Tab inserts 4 spaces, Esc exits block, Cmd+B/I/K wrap, C
     const blocks = try markdown.splitBlocks(alloc, h.viewer.edit_buf.buf.items);
     defer alloc.free(blocks);
     h.viewer.editBlock(blocks[0]);
+    h.viewer.block_buf.want_caret = 0;
+    h.viewer.last_caret = 0;
+    h.viewer.last_anchor = 0;
     t.settle(0.1);
 
     // 1. Tab via macOS `.insert_tab` TextOp inserts 4 spaces at caret (0 -> "    hello").
@@ -217,4 +220,44 @@ test "markdown.parseInline strips [label](url) and **bold** markers" {
     try std.testing.expectEqualStrings("famously", rich.text[rich.spans[0].start..rich.spans[0].end]);
     try std.testing.expectEqualStrings("testing", rich.text[rich.spans[1].start..rich.spans[1].end]);
     try std.testing.expect(rich.spans[1].underline);
+}
+
+test "Live Preview: Cmd+Z on new block after Enter does not duplicate previous block" {
+    const alloc = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.writeFile(io, .{ .sub_path = "note.md", .data = "First block" });
+    const dir_path = try tmp.dir.realPathFileAlloc(io, ".", alloc);
+    defer alloc.free(dir_path);
+
+    var viewer = viewer_mod.Viewer.init(alloc, io);
+    defer viewer.deinit();
+    viewer.open(dir_path, "note.md");
+    viewer.editBlock(.{ .start = 0, .end = "First block".len });
+
+    const Harness = struct {
+        viewer: *viewer_mod.Viewer,
+        fn view(h: *@This(), c: *ui.Context) void {
+            h.viewer.view(c);
+        }
+    };
+    var h: Harness = .{ .viewer = &viewer };
+    var t: ui.Tester = undefined;
+    try t.init(alloc, .init(&h, Harness.view), .{ .width = 800, .height = 600 });
+    defer t.deinit();
+    t.settle(0.1);
+
+    // Edit first block, then press Enter to start a new empty block.
+    t.textOps(&.{.{ .insert = " edited" }});
+    t.settle(0.1);
+    t.key(.enter);
+    t.settle(0.1);
+    try std.testing.expectEqualStrings("", viewer.block_buf.buf.items);
+
+    // Cmd+Z in the new block must NOT restore the first block's text.
+    _ = t.shortcut(.{ .key = 'z', .cmd = true });
+    t.settle(0.1);
+    try std.testing.expectEqualStrings("", viewer.block_buf.buf.items);
 }
