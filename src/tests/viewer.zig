@@ -64,7 +64,14 @@ test "Viewer Live Preview state machine: open, block focus, fenced code, save, a
     h.viewer.save();
     try std.testing.expect(!h.viewer.dirty);
 
-    // 5. Switching to Read mode exits the active block and renders formatted text.
+    // 5. Backspace on an empty block deletes the newline and focuses the previous block.
+    const end_pos = h.viewer.edit_buf.buf.items.len;
+    _ = h.viewer.edit_buf.insert(end_pos, "\n");
+    h.viewer.editBlock(.{ .start = end_pos + 1, .end = end_pos + 1 });
+    h.viewer.deleteEmptyBlock(alloc, h.viewer.active_range.start, h.viewer.active_range.end);
+    try std.testing.expectEqualStrings("Tail", h.viewer.block_buf.buf.items);
+
+    // 6. Switching to Read mode exits the active block and renders formatted text.
     h.viewer.setMode(.read);
     t.settle(0.1);
     try std.testing.expect(!h.viewer.editing_block);

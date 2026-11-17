@@ -216,6 +216,13 @@ pub const Viewer = struct {
         // Splitting before/after separately keeps `active_range` stable across newlines.
         const r_start = @min(self.active_range.start, src.len);
         var r_end = @min(@max(self.active_range.end, r_start), src.len);
+
+        if (self.block_buf.buf.items.len == 0 and r_start > 0 and isBackspace(c)) {
+            c.input.key = null;
+            self.deleteEmptyBlock(c.alloc(), r_start, r_end);
+            return;
+        }
+
         const next_id = self.renderBlockSlice(c, src[0..r_start], 0, 0);
 
         ui.key(c, "active-md-block");
@@ -266,6 +273,27 @@ pub const Viewer = struct {
         const after_src = self.edit_buf.buf.items;
         const after_start = @min(self.active_range.end, after_src.len);
         _ = self.renderBlockSlice(c, after_src[after_start..], after_start, next_id);
+    }
+
+    /// Deletes an empty active block's preceding newline and moves focus to the previous block.
+    pub fn deleteEmptyBlock(self: *Viewer, alloc: std.mem.Allocator, r_start: usize, r_end: usize) void {
+        if (r_start == 0) return;
+        const del_from = if (self.edit_buf.buf.items[r_start - 1] == '\n') r_start - 1 else r_start;
+        _ = self.edit_buf.replace(del_from, r_end, "");
+        self.dirty = true;
+
+        const before = self.edit_buf.buf.items[0..del_from];
+        const prev_blocks = markdown.splitBlocks(alloc, before) catch {
+            self.editing_block = false;
+            return;
+        };
+        defer alloc.free(prev_blocks);
+        if (prev_blocks.len > 0) {
+            self.editBlock(prev_blocks[prev_blocks.len - 1]);
+            self.block_buf.want_caret = self.block_buf.buf.items.len;
+        } else {
+            self.editing_block = false;
+        }
     }
 
     fn renderBlockSlice(self: *Viewer, c: *ui.Context, slice: []const u8, base_offset: usize, start_id: usize) usize {
@@ -382,6 +410,14 @@ pub const Viewer = struct {
         self.spans_ready = true;
     }
 };
+
+fn isBackspace(c: *const ui.Context) bool {
+    if (c.input.key == .backspace) return true;
+    for (c.input.ops) |op| {
+        if (op == .command and op.command == .delete_backward) return true;
+    }
+    return false;
+}
 
 pub fn hasClosingFence(src: []const u8) bool {
     const nl = std.mem.indexOfScalar(u8, src, '\n') orelse return false;
