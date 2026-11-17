@@ -69,6 +69,7 @@ pub const Viewer = struct {
             return;
         }
         self.content = bytes;
+        self.setMode(.edit);
     }
 
     /// Clears the loaded file and resets to the empty welcome state.
