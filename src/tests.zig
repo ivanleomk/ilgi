@@ -83,6 +83,16 @@ test "Sidebar renders per-folder collapsible trees and previews selected file" {
     try std.testing.expect(t.hasText("sub"));
     try std.testing.expect(t.hasText("new.md"));
 
+    // Edit and save hello.md, then verify updated content renders in Viewer.
+    state.sidebar.selectRow(2);
+    t.settle(0.1);
+    state.viewer.startEdit();
+    _ = state.viewer.edit_buf.insert(state.viewer.edit_buf.buf.items.len, "\nEdited line");
+    state.viewer.save();
+    state.viewer.editing = false;
+    t.settle(0.1);
+    try std.testing.expect(t.hasText("Edited line"));
+
     // Delete "new.md" (row 2 under notes: 0=notes, 1=sub, 2=hello.md, 3=new.md).
     try state.sidebar.deleteRow(3);
     t.settle(0.1);

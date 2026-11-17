@@ -2,6 +2,7 @@
 const std = @import("std");
 const nanoui = @import("nanoui");
 const ui = nanoui.ui;
+const kit = nanoui.kit;
 const highlight = @import("highlight.zig");
 const markdown = @import("markdown.zig");
 
@@ -17,6 +18,9 @@ pub const Viewer = struct {
     spans_dark: bool = false,
     spans_ready: bool = false,
     status: ?[]const u8 = null,
+    editing: bool = false,
+    dirty: bool = false,
+    edit_buf: ui.TextBuffer = .{},
 
     pub fn init(allocator: std.mem.Allocator, io: std.Io) Viewer {
         return .{ .allocator = allocator, .io = io };
@@ -24,6 +28,7 @@ pub const Viewer = struct {
 
     pub fn deinit(self: *Viewer) void {
         self.clear();
+        self.edit_buf.deinit();
     }
 
     /// Loads `dir_path/file_name` if it isn't already loaded.
@@ -79,8 +84,33 @@ pub const Viewer = struct {
             self.spans = &.{};
         }
         self.spans_ready = false;
+        self.editing = false;
+        self.dirty = false;
+        self.edit_buf.clear();
         // `status` only holds compile-time string literals, so it is never freed.
         self.status = null;
+    }
+
+    /// Switches into edit mode and loads the current file contents into `edit_buf`.
+    pub fn startEdit(self: *Viewer) void {
+        const text = self.content orelse return;
+        self.edit_buf.clear();
+        _ = self.edit_buf.insert(0, text);
+        self.edit_buf.focus();
+        self.editing = true;
+        self.dirty = false;
+    }
+
+    /// Writes `edit_buf` back to disk and refreshes the preview content.
+    pub fn save(self: *Viewer) void {
+        const path = self.loaded_path orelse return;
+        const data = self.edit_buf.buf.items;
+        std.Io.Dir.cwd().writeFile(self.io, .{ .sub_path = path, .data = data }) catch return;
+
+        if (self.content) |old| self.allocator.free(old);
+        self.content = self.allocator.dupe(u8, data) catch null;
+        self.dirty = false;
+        self.spans_ready = false;
     }
 
     pub fn view(self: *Viewer, c: *ui.Context) void {
@@ -92,11 +122,24 @@ pub const Viewer = struct {
             return;
         };
 
-        topbarView(c, name);
+        self.topbarView(c, name);
         ui.divider(c);
 
         const body = ui.div(c).column().grow().wFull().p(20).scrollY();
         defer body.end();
+
+        if (self.editing) {
+            const res = ui.textArea(c, &self.edit_buf, .{
+                .placeholder = "Start typing...",
+                .width = .fill,
+                .size = 12.5,
+                .max_lines = 255,
+                .submit_on_return = false,
+                .bare = true,
+            });
+            if (res.changed) self.dirty = true;
+            return;
+        }
 
         const text = self.content orelse {
             if (self.status) |msg| ui.text(c, msg, .{ .size = 13, .color = c.theme.muted });
@@ -118,6 +161,28 @@ pub const Viewer = struct {
         });
     }
 
+    fn topbarView(self: *Viewer, c: *ui.Context, name: []const u8) void {
+        const topbar = ui.div(c).row().wFull().px(20).py(8).itemsCenter().justifyBetween().bg(c.theme.surface);
+        defer topbar.end();
+
+        const title = if (self.dirty) c.print("{s} •", .{name}) else name;
+        ui.text(c, title, .{ .size = 14, .weight = .semibold });
+
+        if (self.content == null) return;
+        const actions = ui.div(c).row().itemsCenter().gap(6);
+        defer actions.end();
+        if (self.editing) {
+            if (self.dirty and kit.button(c, "Save", .{ .variant = .primary, .size = .sm }).clicked) {
+                self.save();
+            }
+            if (kit.button(c, "Read", .{ .variant = .secondary, .size = .sm }).clicked) {
+                self.editing = false;
+            }
+        } else if (kit.button(c, "Edit", .{ .variant = .secondary, .size = .sm, .icon = "pencil" }).clicked) {
+            self.startEdit();
+        }
+    }
+
     fn ensureHighlights(self: *Viewer, name: []const u8, text: []const u8, dark: bool) void {
         if (self.spans_ready and self.spans_dark == dark) return;
         if (self.spans.len > 0) self.allocator.free(self.spans);
@@ -126,12 +191,6 @@ pub const Viewer = struct {
         self.spans_ready = true;
     }
 };
-
-fn topbarView(c: *ui.Context, name: []const u8) void {
-    const topbar = ui.div(c).row().wFull().px(20).py(12).itemsCenter().bg(c.theme.surface);
-    defer topbar.end();
-    ui.text(c, name, .{ .size = 14, .weight = .semibold });
-}
 
 fn emptyView(c: *ui.Context) void {
     const empty = ui.div(c).column().sizeFull().itemsCenter().justifyCenter().gap(8);
