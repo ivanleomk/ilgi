@@ -363,9 +363,20 @@ pub const Viewer = struct {
         return false;
     }
 
-    fn collectLinkMatches(self: *const Viewer, query: []const u8, out: *[6]NoteEntry) usize {
+    fn isCurrentFile(self: *const Viewer, entry: NoteEntry) bool {
+        if (self.loaded_path) |lp| {
+            if (entry.full_path.len > 0) return std.mem.eql(u8, entry.full_path, lp);
+        }
+        if (self.file_name) |fnm| {
+            if (entry.full_path.len == 0) return std.mem.eql(u8, entry.name, fnm);
+        }
+        return false;
+    }
+
+    pub fn collectLinkMatches(self: *const Viewer, query: []const u8, out: *[6]NoteEntry) usize {
         var count: usize = 0;
         for (self.note_entries) |entry| {
+            if (self.isCurrentFile(entry)) continue;
             if (containsIgnoreCase(entry.name, query)) {
                 out[count] = entry;
                 count += 1;
@@ -419,8 +430,8 @@ pub const Viewer = struct {
         const sel = @min(self.ac_index, count - 1);
 
         const caret = if (c.focused_text) |ft| ft.caret_rect else ui.Rect{ .x = 24, .y = 80, .w = 2, .h = 18 };
-        const popup_w: f32 = 300;
-        const est_h: f32 = @as(f32, @floatFromInt(count)) * 44 + 10;
+        const popup_w: f32 = 340;
+        const est_h: f32 = @as(f32, @floatFromInt(count)) * 52 + 10;
         const px = @min(@max(8, caret.x), @max(8, c.size.w - popup_w - 8));
         const below_y = caret.y + caret.h + 6;
         const py = if (below_y + est_h > c.size.h - 8 and caret.y > est_h + 8) caret.y - est_h - 6 else below_y;
@@ -444,11 +455,9 @@ pub const Viewer = struct {
                         ui.text(c, ext, .{ .size = 11, .mono = true, .color = c.theme.muted });
                     }
                 }
-                const path_label = if (entry.rel_path.len > 0) entry.rel_path else entry.name;
+                const full_label = if (entry.full_path.len > 0) entry.full_path else if (entry.rel_path.len > 0) entry.rel_path else entry.name;
+                ui.text(c, full_label, .{ .size = 10.5, .mono = true, .color = c.theme.muted, .truncate = .ellipsis });
                 const snippet = self.readSnippet(c.alloc(), entry.full_path);
-                if (!std.mem.eql(u8, path_label, entry.name)) {
-                    ui.text(c, path_label, .{ .size = 10.5, .mono = true, .color = c.theme.muted, .truncate = .ellipsis });
-                }
                 if (snippet.len > 0) {
                     ui.text(c, snippet, .{ .size = 11, .color = c.theme.muted, .truncate = .ellipsis });
                 }

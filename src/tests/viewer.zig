@@ -156,6 +156,7 @@ test "Link autocomplete: Up/Down navigates, Enter accepts selected item, Esc clo
     var viewer = viewer_mod.Viewer.init(alloc, io);
     defer viewer.deinit();
     const entries = [_]viewer_mod.NoteEntry{
+        .{ .name = "note.md", .full_path = "" },
         .{ .name = "sample.js", .full_path = "" },
         .{ .name = "sample.md", .full_path = "" },
         .{ .name = "sample.py", .full_path = "" },
@@ -197,6 +198,11 @@ test "Link autocomplete: Up/Down navigates, Enter accepts selected item, Esc clo
     try std.testing.expect(viewer.ac_dismissed_start != null);
 
     // Re-open autocomplete by clearing dismissal, then Down -> 1 and Enter accepts sample.md.
+    // Also verify current file (note.md) is excluded even for an empty query.
+    var all_matches: [6]viewer_mod.NoteEntry = undefined;
+    const all_count = viewer.collectLinkMatches("", &all_matches);
+    try std.testing.expectEqual(@as(usize, 3), all_count);
+
     viewer.ac_dismissed_start = null;
     viewer.ac_index = 1;
     t.settle(0.1);
