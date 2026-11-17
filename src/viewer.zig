@@ -168,7 +168,11 @@ pub const Viewer = struct {
             return;
         }
 
-        if (self.mode != .read and c.shortcut(.{ .key = 's', .cmd = true })) {
+        if (self.mode != .read and (c.shortcut(.{ .key = 's', .cmd = true }) or
+            c.shortcut(.{ .key = ui.Shortcut.enter, .cmd = true }) or
+            (c.input.key == .enter and c.input.cmd)))
+        {
+            c.input.key = null;
             self.save();
         }
 
