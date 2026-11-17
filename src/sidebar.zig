@@ -106,6 +106,31 @@ pub const Sidebar = struct {
         self.selected_name = self.allocator.dupe(u8, row.name) catch null;
     }
 
+    /// Opens an existing note matching `target` (or `target.md`), or creates `target.md`
+    /// in the active/first configured folder if it does not exist yet.
+    pub fn openLink(self: *Sidebar, target: []const u8) void {
+        const clean = std.mem.trim(u8, target, " \t\r\n");
+        if (clean.len == 0) return;
+
+        for (self.rows.items, 0..) |row, i| {
+            if (row.is_dir) continue;
+            const stem = std.fs.path.stem(row.name);
+            if (std.ascii.eqlIgnoreCase(row.name, clean) or std.ascii.eqlIgnoreCase(stem, clean)) {
+                self.selectRow(i);
+                return;
+            }
+        }
+
+        const dir_path = self.selected_dir orelse
+            (if (self.config.folders.items.len > 0) self.config.folders.items[0].path else return);
+        var buf: [256]u8 = undefined;
+        const file_name = if (std.mem.endsWith(u8, clean, ".md"))
+            clean
+        else
+            std.fmt.bufPrint(&buf, "{s}.md", .{clean}) catch return;
+        self.createFile(dir_path, file_name) catch {};
+    }
+
     /// Creates a new empty file in `dir_path` and selects it.
     pub fn createFile(self: *Sidebar, dir_path: []const u8, name: []const u8) !void {
         const clean = std.mem.trim(u8, name, " \t\r\n");

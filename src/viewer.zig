@@ -24,8 +24,12 @@ pub const Viewer = struct {
     dirty: bool = false,
     edit_buf: ui.TextBuffer = .{},
     editing_block: bool = false,
+    block_just_opened: bool = false,
     active_range: markdown.BlockRange = .{ .start = 0, .end = 0 },
     block_buf: ui.TextBuffer = .{},
+    pending_link: ?[]const u8 = null,
+    last_caret: usize = 0,
+    last_anchor: usize = 0,
 
     pub fn init(allocator: std.mem.Allocator, io: std.Io) Viewer {
         return .{ .allocator = allocator, .io = io };
@@ -94,6 +98,10 @@ pub const Viewer = struct {
         self.mode = .read;
         self.dirty = false;
         self.editing_block = false;
+        if (self.pending_link) |pl| {
+            self.allocator.free(pl);
+            self.pending_link = null;
+        }
         self.edit_buf.clear();
         self.block_buf.clear();
         // `status` only holds compile-time string literals, so it is never freed.
@@ -113,7 +121,12 @@ pub const Viewer = struct {
             _ = self.edit_buf.insert(0, text);
             self.editing_block = false;
             self.dirty = false;
-            if (!markdown.isMarkdownFile(self.file_name orelse "")) self.edit_buf.focus();
+            const is_md = markdown.isMarkdownFile(self.file_name orelse "");
+            if (is_md and text.len == 0) {
+                self.editBlock(.{ .start = 0, .end = 0 });
+            } else if (!is_md) {
+                self.edit_buf.focus();
+            }
         }
         self.mode = .edit;
     }
@@ -121,6 +134,7 @@ pub const Viewer = struct {
     /// Activates a Markdown block `[range.start..range.end)` in `edit_buf` for inline editing.
     pub fn editBlock(self: *Viewer, range: markdown.BlockRange) void {
         self.editing_block = true;
+        self.block_just_opened = true;
         self.active_range = range;
         self.block_buf.clear();
         _ = self.block_buf.insert(0, self.edit_buf.buf.items[range.start..range.end]);
@@ -159,6 +173,14 @@ pub const Viewer = struct {
             return;
         }
 
+        if (self.mode != .read and (c.shortcut(.{ .key = 's', .cmd = true }) or
+            c.shortcut(.{ .key = ui.Shortcut.enter, .cmd = true }) or
+            (c.input.key == .enter and c.input.cmd)))
+        {
+            c.input.key = null;
+            self.save();
+        }
+
         if (self.mode == .read) {
             self.renderRead(c, name, self.content.?);
             return;
@@ -170,6 +192,7 @@ pub const Viewer = struct {
         }
 
         const mono = highlight.isCodeFile(name);
+        const tab_inserted = self.handleTabKey(c, &self.edit_buf);
         const code_spans = if (mono) (highlight.highlight(c.alloc(), name, self.edit_buf.buf.items, c.theme.dark) catch &.{}) else &.{};
         const res = ui.textArea(c, &self.edit_buf, .{
             .placeholder = "Start typing...",
@@ -181,7 +204,11 @@ pub const Viewer = struct {
             .submit_on_return = false,
             .bare = true,
         });
-        if (res.changed) self.dirty = true;
+        if (c.focused_text) |ft| {
+            self.last_caret = ft.caret;
+            self.last_anchor = ft.anchor;
+        }
+        if (tab_inserted or res.changed) self.dirty = true;
     }
 
     fn renderLiveMarkdown(self: *Viewer, c: *ui.Context) void {
@@ -190,7 +217,15 @@ pub const Viewer = struct {
         defer col.end();
 
         if (!self.editing_block) {
-            _ = self.renderBlockSlice(c, src, 0, 0);
+            const count = self.renderBlockSlice(c, src, 0, 0);
+            if (count == 0) {
+                const ph = ui.div(c).wFull().py(4).control();
+                {
+                    defer ph.end();
+                    ui.text(c, "Start writing...", .{ .size = 13, .color = c.theme.muted });
+                }
+                if (ph.clicked()) self.editBlock(.{ .start = 0, .end = 0 });
+            }
             return;
         }
 
@@ -198,15 +233,26 @@ pub const Viewer = struct {
         // Splitting before/after separately keeps `active_range` stable across newlines.
         const r_start = @min(self.active_range.start, src.len);
         var r_end = @min(@max(self.active_range.end, r_start), src.len);
+
+        if (self.block_buf.buf.items.len == 0 and r_start > 0 and isBackspace(c)) {
+            c.input.key = null;
+            self.deleteEmptyBlock(c.alloc(), r_start, r_end);
+            return;
+        }
+
         const next_id = self.renderBlockSlice(c, src[0..r_start], 0, 0);
 
         ui.key(c, "active-md-block");
+        const just_opened = self.block_just_opened;
+        self.block_just_opened = false;
+        const tab_inserted = self.handleTabKey(c, &self.block_buf);
         const block_text = self.block_buf.buf.items;
         const is_fenced = std.mem.startsWith(u8, std.mem.trimStart(u8, block_text, " \t"), "```");
+        const closed_fence = is_fenced and hasClosingFence(block_text);
         const live_spans = if (is_fenced)
-            (highlight.highlight(c.alloc(), "block.md", block_text, c.theme.dark) catch &.{})
+            (highlight.highlight(c.alloc(), fenceFilename(c.alloc(), block_text), block_text, c.theme.dark) catch &.{})
         else
-            (markdown.liveSpans(c.alloc(), block_text, c.theme.muted, c.theme.surface_hover) catch &.{});
+            (markdown.liveSpans(c.alloc(), block_text, c.theme.muted, c.theme.surface_hover, c.theme.accent) catch &.{});
 
         const res = ui.textArea(c, &self.block_buf, .{
             .width = .fill,
@@ -214,11 +260,16 @@ pub const Viewer = struct {
             .mono = is_fenced,
             .spans = live_spans,
             .max_lines = 64,
-            .submit_on_return = !is_fenced,
+            .submit_on_return = !is_fenced or closed_fence,
             .bare = true,
         });
+        if (c.focused_text) |ft| {
+            self.last_caret = ft.caret;
+            self.last_anchor = ft.anchor;
+        }
+        const md_shortcut = self.handleMarkdownShortcuts(c, &self.block_buf);
         const new_text = self.block_buf.buf.items;
-        if (res.changed or !std.mem.eql(u8, new_text, self.edit_buf.buf.items[r_start..r_end])) {
+        if (tab_inserted or md_shortcut or res.changed or !std.mem.eql(u8, new_text, self.edit_buf.buf.items[r_start..r_end])) {
             _ = self.edit_buf.replace(r_start, r_end, new_text);
             r_end = r_start + new_text.len;
             self.active_range = .{ .start = r_start, .end = r_end };
@@ -232,32 +283,108 @@ pub const Viewer = struct {
             self.dirty = true;
             return;
         }
+        if (!just_opened and !res.focused) {
+            self.editing_block = false;
+        }
 
         const after_src = self.edit_buf.buf.items;
         const after_start = @min(self.active_range.end, after_src.len);
         _ = self.renderBlockSlice(c, after_src[after_start..], after_start, next_id);
     }
 
+    /// Deletes an empty active block's preceding newline and moves focus to the previous block.
+    pub fn deleteEmptyBlock(self: *Viewer, alloc: std.mem.Allocator, r_start: usize, r_end: usize) void {
+        if (r_start == 0) return;
+        const del_from = if (self.edit_buf.buf.items[r_start - 1] == '\n') r_start - 1 else r_start;
+        _ = self.edit_buf.replace(del_from, r_end, "");
+        self.dirty = true;
+
+        const before = self.edit_buf.buf.items[0..del_from];
+        const prev_blocks = markdown.splitBlocks(alloc, before) catch {
+            self.editing_block = false;
+            return;
+        };
+        defer alloc.free(prev_blocks);
+        if (prev_blocks.len > 0) {
+            self.editBlock(prev_blocks[prev_blocks.len - 1]);
+            self.block_buf.want_caret = self.block_buf.buf.items.len;
+        } else {
+            self.editing_block = false;
+        }
+    }
+
     fn renderBlockSlice(self: *Viewer, c: *ui.Context, slice: []const u8, base_offset: usize, start_id: usize) usize {
         const blocks = markdown.splitBlocks(c.alloc(), slice) catch return start_id;
         for (blocks, 0..) |b, i| {
             ui.keyInt(c, start_id + i);
+            const block_src = slice[b.start..b.end];
             const row = ui.div(c).wFull().control();
             {
                 defer row.end();
-                markdown.view(c, slice[b.start..b.end]);
+                markdown.view(c, block_src);
             }
             if (row.clicked()) {
                 self.editBlock(.{ .start = base_offset + b.start, .end = base_offset + b.end });
                 return start_id + i + 1;
             }
+            self.renderLinkChips(c, block_src, start_id + i);
         }
         return start_id + blocks.len;
+    }
+
+    fn renderLinkChips(self: *Viewer, c: *ui.Context, src: []const u8, seed: usize) void {
+        const links = markdown.extractLinks(c.alloc(), src) catch return;
+        if (links.len == 0) return;
+
+        const bar = ui.div(c).row().wFull().gap(6).pt(2);
+        defer bar.end();
+        for (links, 0..) |target, li| {
+            ui.keyInt(c, 500_000 + seed * 32 + li);
+            const label = c.print("↗ {s}", .{target});
+            if (kit.button(c, label, .{ .variant = .ghost, .size = .xs }).clicked) {
+                if (self.pending_link) |old| self.allocator.free(old);
+                self.pending_link = self.allocator.dupe(u8, target) catch null;
+            }
+        }
+    }
+
+    fn handleTabKey(self: *Viewer, c: *ui.Context, buf: *ui.TextBuffer) bool {
+        if (c.input.key == .tab and !c.input.shift) {
+            const pos = @min(self.last_caret, buf.buf.items.len);
+            _ = buf.insert(pos, "  ");
+            buf.want_caret = pos + 2;
+            c.input.key = null;
+            return true;
+        }
+        return false;
+    }
+
+    fn handleMarkdownShortcuts(self: *Viewer, c: *ui.Context, buf: *ui.TextBuffer) bool {
+        const marker: ?struct { open: []const u8, close: []const u8 } = if (c.shortcut(.{ .key = 'b', .cmd = true }))
+            .{ .open = "**", .close = "**" }
+        else if (c.shortcut(.{ .key = 'i', .cmd = true }))
+            .{ .open = "*", .close = "*" }
+        else if (c.shortcut(.{ .key = 'k', .cmd = true }))
+            .{ .open = "[[", .close = "]]" }
+        else
+            null;
+
+        const m = marker orelse return false;
+        const len = buf.buf.items.len;
+        const a = @min(self.last_caret, len);
+        const b = @min(self.last_anchor, len);
+        const lo = @min(a, b);
+        const hi = @max(a, b);
+        _ = buf.insert(hi, m.close);
+        _ = buf.insert(lo, m.open);
+        buf.want_caret = if (lo == hi) lo + m.open.len else hi + m.open.len + m.close.len;
+        return true;
     }
 
     fn renderRead(self: *Viewer, c: *ui.Context, name: []const u8, text: []const u8) void {
         if (markdown.isMarkdownFile(name)) {
             markdown.view(c, text);
+            self.renderLinkChips(c, text, 0);
             return;
         }
 
@@ -300,6 +427,31 @@ pub const Viewer = struct {
         self.spans_ready = true;
     }
 };
+
+fn isBackspace(c: *const ui.Context) bool {
+    if (c.input.key == .backspace) return true;
+    for (c.input.ops) |op| {
+        if (op == .command and op.command == .delete_backward) return true;
+    }
+    return false;
+}
+
+pub fn hasClosingFence(src: []const u8) bool {
+    const nl = std.mem.indexOfScalar(u8, src, '\n') orelse return false;
+    var rest = src[nl + 1 ..];
+    const last_nl = std.mem.lastIndexOfScalar(u8, rest, '\n');
+    const last_line = if (last_nl) |idx| rest[idx + 1 ..] else rest;
+    return std.mem.startsWith(u8, std.mem.trim(u8, last_line, " \t\r"), "```");
+}
+
+fn fenceFilename(alloc: std.mem.Allocator, src: []const u8) []const u8 {
+    const nl = std.mem.indexOfScalar(u8, src, '\n') orelse return "block.md";
+    const first = std.mem.trim(u8, src[0..nl], " \t\r");
+    if (!std.mem.startsWith(u8, first, "```")) return "block.md";
+    const lang = std.mem.trim(u8, first[3..], " \t");
+    if (lang.len == 0) return "block.md";
+    return std.fmt.allocPrint(alloc, "block.{s}", .{lang}) catch "block.md";
+}
 
 fn blockFontSize(src: []const u8) f32 {
     if (std.mem.startsWith(u8, src, "# ")) return 20;
