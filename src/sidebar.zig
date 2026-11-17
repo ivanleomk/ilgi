@@ -35,6 +35,9 @@ pub const Sidebar = struct {
     selected_dir: ?[]const u8 = null,
     selected_name: ?[]const u8 = null,
 
+    creating_kind: ?enum { file, folder } = null,
+    new_name_buf: ui.TextBuffer = .{},
+
     pub fn init(allocator: std.mem.Allocator, io: std.Io, config_path: []const u8) Sidebar {
         const cfg = config_mod.Config.load(allocator, io, config_path) catch config_mod.Config.init(allocator);
         var s: Sidebar = .{
@@ -52,6 +55,7 @@ pub const Sidebar = struct {
     }
 
     pub fn deinit(self: *Sidebar) void {
+        self.new_name_buf.deinit();
         self.clearSelection();
         var it = self.expanded.keyIterator();
         while (it.next()) |key| self.allocator.free(key.*);
@@ -100,16 +104,105 @@ pub const Sidebar = struct {
         self.selected_name = self.allocator.dupe(u8, row.name) catch null;
     }
 
+    /// Creates a new empty file in `dir_path` and selects it.
+    pub fn createFile(self: *Sidebar, dir_path: []const u8, name: []const u8) !void {
+        const clean = std.mem.trim(u8, name, " \t\r\n");
+        if (clean.len == 0) return error.InvalidName;
+        var dir = try std.Io.Dir.cwd().openDir(self.io, dir_path, .{});
+        defer dir.close(self.io);
+        try dir.writeFile(self.io, .{ .sub_path = clean, .data = "" });
+
+        self.setExpanded(dir_path, true);
+        self.clearSelection();
+        self.selected_dir = self.allocator.dupe(u8, dir_path) catch null;
+        self.selected_name = self.allocator.dupe(u8, clean) catch null;
+        self.rebuildTree();
+    }
+
+    /// Creates a new subfolder in `dir_path` and expands it.
+    pub fn createFolder(self: *Sidebar, dir_path: []const u8, name: []const u8) !void {
+        const clean = std.mem.trim(u8, name, " \t\r\n");
+        if (clean.len == 0) return error.InvalidName;
+        var dir = try std.Io.Dir.cwd().openDir(self.io, dir_path, .{});
+        defer dir.close(self.io);
+        try dir.createDirPath(self.io, clean);
+
+        self.setExpanded(dir_path, true);
+        const full = try std.fs.path.join(self.allocator, &.{ dir_path, clean });
+        defer self.allocator.free(full);
+        self.setExpanded(full, true);
+        self.rebuildTree();
+    }
+
+    /// Deletes a non-root file or folder at `index` in `rows`.
+    pub fn deleteRow(self: *Sidebar, index: usize) !void {
+        if (index >= self.rows.items.len) return;
+        const row = self.rows.items[index];
+        if (row.is_root) return;
+
+        const parent_path = std.fs.path.dirname(row.full_path) orelse return;
+        var parent = try std.Io.Dir.cwd().openDir(self.io, parent_path, .{});
+        defer parent.close(self.io);
+
+        if (row.is_dir) {
+            try parent.deleteTree(self.io, row.name);
+            self.setExpanded(row.full_path, false);
+        } else {
+            try parent.deleteFile(self.io, row.name);
+        }
+
+        if (self.selected_dir) |sd| {
+            if (std.mem.startsWith(u8, sd, row.full_path) or
+                (std.mem.eql(u8, sd, row.dir_path) and self.selected_name != null and std.mem.eql(u8, self.selected_name.?, row.name)))
+            {
+                self.clearSelection();
+            }
+        }
+        self.rebuildTree();
+    }
+
     pub fn view(self: *Sidebar, c: *ui.Context) void {
         const root = ui.div(c).column().w(260).hFull().bg(c.theme.surface);
         defer root.end();
 
-        const header = ui.div(c).row().wFull().p(12).itemsCenter().justifyBetween().gap(8);
+        const header = ui.div(c).row().wFull().p(12).itemsCenter().justifyBetween().gap(4);
         {
             defer header.end();
             ui.text(c, "Ilgi", .{ .size = 16, .weight = .bold });
+            const actions = ui.div(c).row().itemsCenter().gap(2);
+            defer actions.end();
+            if (self.config.folders.items.len > 0) {
+                if (kit.iconButton(c, "doc.badge.plus", .{ .size = .sm, .tooltip = "New file" }).clicked) {
+                    self.startCreate(.file);
+                }
+                if (kit.iconButton(c, "folder.badge.plus", .{ .size = .sm, .tooltip = "New folder" }).clicked) {
+                    self.startCreate(.folder);
+                }
+            }
             if (kit.button(c, "Add", .{ .variant = .secondary, .size = .sm, .icon = "plus" }).clicked) {
                 self.pickFolder();
+            }
+        }
+
+        if (self.creating_kind) |kind| {
+            const box = ui.div(c).row().wFull().px(8).pb(8).itemsCenter().gap(4);
+            defer box.end();
+            const ph = if (kind == .file) "note.md" else "folder-name";
+            const res = ui.textField(c, &self.new_name_buf, .{ .placeholder = ph, .width = .fill, .size = 12.5 });
+            if (res.submitted) {
+                const target_dir = self.selected_dir orelse self.config.folders.items[0].path;
+                const name = self.new_name_buf.buf.items;
+                if (kind == .file) {
+                    self.createFile(target_dir, name) catch {};
+                } else {
+                    self.createFolder(target_dir, name) catch {};
+                }
+                self.creating_kind = null;
+                self.new_name_buf.clear();
+            }
+            if (kit.iconButton(c, "xmark", .{ .size = .xs, .tooltip = "Cancel" }).clicked) {
+                self.creating_kind = null;
+                self.new_name_buf.clear();
             }
         }
 
@@ -171,6 +264,10 @@ pub const Sidebar = struct {
                 }
                 return;
             }
+            if (!row.is_root and selected and kit.iconButton(c, "trash", .{ .size = .xs, .tooltip = "Delete" }).clicked) {
+                self.deleteRow(i) catch {};
+                return;
+            }
         }
     }
 
@@ -230,6 +327,12 @@ pub const Sidebar = struct {
             self.allocator.free(n);
             self.selected_name = null;
         }
+    }
+
+    fn startCreate(self: *Sidebar, kind: @TypeOf(self.creating_kind.?)) void {
+        self.creating_kind = kind;
+        self.new_name_buf.clear();
+        self.new_name_buf.focus();
     }
 
     fn pickFolder(self: *Sidebar) void {
