@@ -254,6 +254,9 @@ pub const Viewer = struct {
             self.dirty = true;
             return;
         }
+        if (!res.focused and !self.block_buf.want_focus) {
+            self.editing_block = false;
+        }
 
         const after_src = self.edit_buf.buf.items;
         const after_start = @min(self.active_range.end, after_src.len);
