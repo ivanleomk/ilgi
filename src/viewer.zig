@@ -229,7 +229,7 @@ pub const Viewer = struct {
 
     fn renderLiveMarkdown(self: *Viewer, c: *ui.Context) void {
         const src = self.edit_buf.buf.items;
-        const col = ui.div(c).column().wFull().gap(10);
+        const col = ui.div(c).column().wFull().gap(6);
         defer col.end();
 
         const ac_block_text = self.block_buf.buf.items;

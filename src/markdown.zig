@@ -361,12 +361,12 @@ pub fn view(c: *ui.Context, src: []const u8) void {
         // List item (- / * / 1. / a. / A.)
         if (parseListPrefix(raw_line)) |li| {
             const pad_l: f32 = @floatFromInt(li.depth * 16);
-            const item = ui.div(c).row().wFull().pl(pad_l).gap(6);
+            const item = ui.div(c).row().wFull().pl(pad_l).gap(4);
             defer item.end();
-            ui.text(c, li.marker, .{ .size = 13, .color = c.theme.muted, .leading = 1.45 });
+            ui.text(c, li.marker, .{ .size = 13, .color = c.theme.muted, .leading = 1.65 });
             const body = ui.div(c).grow();
             defer body.end();
-            richLine(c, li.body, .{ .size = 13, .wrap = true, .leading = 1.45 });
+            richLine(c, li.body, .{ .size = 13, .wrap = true, .leading = 1.65 });
             continue;
         }
 
