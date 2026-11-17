@@ -455,8 +455,8 @@ pub const Viewer = struct {
                         ui.text(c, ext, .{ .size = 11, .mono = true, .color = c.theme.muted });
                     }
                 }
-                const full_label = if (entry.full_path.len > 0) entry.full_path else if (entry.rel_path.len > 0) entry.rel_path else entry.name;
-                ui.text(c, full_label, .{ .size = 10.5, .mono = true, .color = c.theme.muted, .truncate = .ellipsis });
+                const path_label = if (entry.rel_path.len > 0) entry.rel_path else entry.name;
+                ui.text(c, path_label, .{ .size = 10.5, .mono = true, .color = c.theme.muted, .truncate = .ellipsis });
                 const snippet = self.readSnippet(c.alloc(), entry.full_path);
                 if (snippet.len > 0) {
                     ui.text(c, snippet, .{ .size = 11, .color = c.theme.muted, .truncate = .ellipsis });
