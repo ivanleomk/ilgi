@@ -9,6 +9,106 @@ pub fn isMarkdownFile(name: []const u8) bool {
     return std.ascii.eqlIgnoreCase(ext, ".md") or std.ascii.eqlIgnoreCase(ext, ".markdown");
 }
 
+pub const BlockRange = struct {
+    start: usize,
+    end: usize,
+};
+
+/// Splits Markdown `src` into top-level block byte ranges `[start, end)`.
+pub fn splitBlocks(allocator: std.mem.Allocator, src: []const u8) ![]BlockRange {
+    var out: std.ArrayList(BlockRange) = .empty;
+    errdefer out.deinit(allocator);
+
+    var pos: usize = 0;
+    while (pos < src.len) {
+        const line_end = std.mem.indexOfScalarPos(u8, src, pos, '\n') orelse src.len;
+        const raw_line = std.mem.trimEnd(u8, src[pos..line_end], "\r");
+        const trimmed = std.mem.trim(u8, raw_line, " \t");
+        const block_start = pos;
+        pos = if (line_end < src.len) line_end + 1 else src.len;
+
+        if (trimmed.len == 0) continue;
+
+        if (std.mem.startsWith(u8, trimmed, "```")) {
+            var block_end = src.len;
+            while (pos < src.len) {
+                const next_end = std.mem.indexOfScalarPos(u8, src, pos, '\n') orelse src.len;
+                const inner = std.mem.trim(u8, src[pos..next_end], " \t\r");
+                pos = if (next_end < src.len) next_end + 1 else src.len;
+                if (std.mem.startsWith(u8, inner, "```")) {
+                    block_end = next_end;
+                    break;
+                }
+            }
+            try out.append(allocator, .{ .start = block_start, .end = block_end });
+            continue;
+        }
+
+        try out.append(allocator, .{ .start = block_start, .end = line_end });
+    }
+    return out.toOwnedSlice(allocator);
+}
+
+/// Produces ordered, non-overlapping `ui.Span`s for raw Markdown `src` so
+/// `ui.textArea` can style **bold**, *italic*, `code`, and # headings live.
+pub fn liveSpans(
+    allocator: std.mem.Allocator,
+    src: []const u8,
+    muted: ui.Color,
+    code_bg: ui.Color,
+) ![]ui.Span {
+    var spans: std.ArrayList(ui.Span) = .empty;
+    errdefer spans.deinit(allocator);
+
+    var i: usize = 0;
+    // Dim leading `# ` heading markers on the first line.
+    if (headingLevel(src)) |h| {
+        const prefix_len = src.len - h.text.len;
+        try spans.append(allocator, .{ .start = 0, .end = @intCast(prefix_len), .color = muted });
+        try spans.append(allocator, .{ .start = @intCast(prefix_len), .end = @intCast(src.len), .weight = .bold });
+        return spans.toOwnedSlice(allocator);
+    }
+
+    while (i < src.len) {
+        if (src[i] == '`' and i + 1 < src.len) {
+            if (std.mem.indexOfScalarPos(u8, src, i + 1, '`')) |close| {
+                if (close > i + 1) {
+                    try spans.append(allocator, .{ .start = @intCast(i), .end = @intCast(i + 1), .color = muted });
+                    try spans.append(allocator, .{ .start = @intCast(i + 1), .end = @intCast(close), .mono = true, .background = code_bg });
+                    try spans.append(allocator, .{ .start = @intCast(close), .end = @intCast(close + 1), .color = muted });
+                    i = close + 1;
+                    continue;
+                }
+            }
+        }
+        if (i + 1 < src.len and ((src[i] == '*' and src[i + 1] == '*') or (src[i] == '_' and src[i + 1] == '_'))) {
+            const marker = src[i .. i + 2];
+            if (std.mem.indexOfPos(u8, src, i + 2, marker)) |close| {
+                if (close > i + 2) {
+                    try spans.append(allocator, .{ .start = @intCast(i), .end = @intCast(i + 2), .color = muted });
+                    try spans.append(allocator, .{ .start = @intCast(i + 2), .end = @intCast(close), .weight = .bold });
+                    try spans.append(allocator, .{ .start = @intCast(close), .end = @intCast(close + 2), .color = muted });
+                    i = close + 2;
+                    continue;
+                }
+            }
+        }
+        if ((src[i] == '*' or src[i] == '_') and i + 1 < src.len and src[i + 1] != ' ') {
+            if (std.mem.indexOfScalarPos(u8, src, i + 1, src[i])) |close| {
+                if (close > i + 1) {
+                    try spans.append(allocator, .{ .start = @intCast(i), .end = @intCast(i + 1), .color = muted });
+                    try spans.append(allocator, .{ .start = @intCast(i + 1), .end = @intCast(close), .italic = true });
+                    try spans.append(allocator, .{ .start = @intCast(close), .end = @intCast(close + 1), .color = muted });
+                    i = close + 1;
+                    continue;
+                }
+            }
+        }
+        i += 1;
+    }
+    return spans.toOwnedSlice(allocator);
+}
+
 /// Renders `src` as formatted Markdown blocks inside a vertical column.
 pub fn view(c: *ui.Context, src: []const u8) void {
     const col = ui.div(c).column().wFull().gap(10);
