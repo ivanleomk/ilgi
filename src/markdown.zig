@@ -9,6 +9,46 @@ pub fn isMarkdownFile(name: []const u8) bool {
     return std.ascii.eqlIgnoreCase(ext, ".md") or std.ascii.eqlIgnoreCase(ext, ".markdown");
 }
 
+pub const BlockRange = struct {
+    start: usize,
+    end: usize,
+};
+
+/// Splits Markdown `src` into top-level block byte ranges `[start, end)`.
+pub fn splitBlocks(allocator: std.mem.Allocator, src: []const u8) ![]BlockRange {
+    var out: std.ArrayList(BlockRange) = .empty;
+    errdefer out.deinit(allocator);
+
+    var pos: usize = 0;
+    while (pos < src.len) {
+        const line_end = std.mem.indexOfScalarPos(u8, src, pos, '\n') orelse src.len;
+        const raw_line = std.mem.trimEnd(u8, src[pos..line_end], "\r");
+        const trimmed = std.mem.trim(u8, raw_line, " \t");
+        const block_start = pos;
+        pos = if (line_end < src.len) line_end + 1 else src.len;
+
+        if (trimmed.len == 0) continue;
+
+        if (std.mem.startsWith(u8, trimmed, "```")) {
+            var block_end = src.len;
+            while (pos < src.len) {
+                const next_end = std.mem.indexOfScalarPos(u8, src, pos, '\n') orelse src.len;
+                const inner = std.mem.trim(u8, src[pos..next_end], " \t\r");
+                pos = if (next_end < src.len) next_end + 1 else src.len;
+                if (std.mem.startsWith(u8, inner, "```")) {
+                    block_end = next_end;
+                    break;
+                }
+            }
+            try out.append(allocator, .{ .start = block_start, .end = block_end });
+            continue;
+        }
+
+        try out.append(allocator, .{ .start = block_start, .end = line_end });
+    }
+    return out.toOwnedSlice(allocator);
+}
+
 /// Renders `src` as formatted Markdown blocks inside a vertical column.
 pub fn view(c: *ui.Context, src: []const u8) void {
     const col = ui.div(c).column().wFull().gap(10);

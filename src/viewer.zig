@@ -1,4 +1,4 @@
-//! File viewer component: loads and renders the currently selected text/code file.
+//! File viewer component: Read mode + Obsidian-style single-pane Live Preview editing.
 const std = @import("std");
 const nanoui = @import("nanoui");
 const ui = nanoui.ui;
@@ -8,7 +8,7 @@ const markdown = @import("markdown.zig");
 
 const max_preview_bytes = 1024 * 1024;
 
-pub const ViewMode = enum { read, split, edit };
+pub const ViewMode = enum { read, edit };
 
 pub const Viewer = struct {
     allocator: std.mem.Allocator,
@@ -23,6 +23,9 @@ pub const Viewer = struct {
     mode: ViewMode = .read,
     dirty: bool = false,
     edit_buf: ui.TextBuffer = .{},
+    active_block: ?usize = null,
+    active_range: markdown.BlockRange = .{ .start = 0, .end = 0 },
+    block_buf: ui.TextBuffer = .{},
 
     pub fn init(allocator: std.mem.Allocator, io: std.Io) Viewer {
         return .{ .allocator = allocator, .io = io };
@@ -31,6 +34,7 @@ pub const Viewer = struct {
     pub fn deinit(self: *Viewer) void {
         self.clear();
         self.edit_buf.deinit();
+        self.block_buf.deinit();
     }
 
     /// Loads `dir_path/file_name` if it isn't already loaded.
@@ -88,14 +92,17 @@ pub const Viewer = struct {
         self.spans_ready = false;
         self.mode = .read;
         self.dirty = false;
+        self.active_block = null;
         self.edit_buf.clear();
+        self.block_buf.clear();
         // `status` only holds compile-time string literals, so it is never freed.
         self.status = null;
     }
 
-    /// Switches into `next_mode` (`.split` or `.edit`) and loads `content` if coming from `.read`.
+    /// Switches between `.read` and `.edit` (single-pane Live Preview for Markdown).
     pub fn setMode(self: *Viewer, next_mode: ViewMode) void {
         if (next_mode == .read) {
+            self.active_block = null;
             self.mode = .read;
             return;
         }
@@ -103,10 +110,20 @@ pub const Viewer = struct {
             const text = self.content orelse return;
             self.edit_buf.clear();
             _ = self.edit_buf.insert(0, text);
-            self.edit_buf.focus();
+            self.active_block = null;
             self.dirty = false;
+            if (!markdown.isMarkdownFile(self.file_name orelse "")) self.edit_buf.focus();
         }
-        self.mode = next_mode;
+        self.mode = .edit;
+    }
+
+    /// Selects a single Markdown block for inline raw editing while keeping others formatted.
+    pub fn editBlock(self: *Viewer, idx: usize, range: markdown.BlockRange) void {
+        self.active_block = idx;
+        self.active_range = range;
+        self.block_buf.clear();
+        _ = self.block_buf.insert(0, self.edit_buf.buf.items[range.start..range.end]);
+        self.block_buf.focus();
     }
 
     /// Writes `edit_buf` back to disk and refreshes the preview content.
@@ -133,43 +150,24 @@ pub const Viewer = struct {
         self.topbarView(c, name);
         ui.divider(c);
 
+        const body = ui.div(c).column().grow().wFull().p(20).scrollY();
+        defer body.end();
+
         if (self.content == null) {
-            const body = ui.div(c).column().grow().wFull().p(20).scrollY();
-            defer body.end();
             if (self.status) |msg| ui.text(c, msg, .{ .size = 13, .color = c.theme.muted });
             return;
         }
 
-        switch (self.mode) {
-            .read => {
-                const body = ui.div(c).column().grow().wFull().p(20).scrollY();
-                defer body.end();
-                self.renderPreview(c, name, self.content.?, false);
-            },
-            .edit => {
-                const body = ui.div(c).column().grow().wFull().p(20).scrollY();
-                defer body.end();
-                self.renderEditor(c);
-            },
-            .split => {
-                const split = ui.div(c).row().grow().wFull();
-                defer split.end();
-
-                const left = ui.div(c).column().grow().hFull().p(20).scrollY();
-                {
-                    defer left.end();
-                    self.renderEditor(c);
-                }
-                ui.div(c).w(1).hFull().bg(c.theme.border).end();
-
-                const right = ui.div(c).column().grow().hFull().p(20).scrollY();
-                defer right.end();
-                self.renderPreview(c, name, self.edit_buf.buf.items, true);
-            },
+        if (self.mode == .read) {
+            self.renderRead(c, name, self.content.?);
+            return;
         }
-    }
 
-    fn renderEditor(self: *Viewer, c: *ui.Context) void {
+        if (markdown.isMarkdownFile(name)) {
+            self.renderLiveMarkdown(c);
+            return;
+        }
+
         const res = ui.textArea(c, &self.edit_buf, .{
             .placeholder = "Start typing...",
             .width = .fill,
@@ -181,20 +179,53 @@ pub const Viewer = struct {
         if (res.changed) self.dirty = true;
     }
 
-    fn renderPreview(self: *Viewer, c: *ui.Context, name: []const u8, text: []const u8, live: bool) void {
+    fn renderLiveMarkdown(self: *Viewer, c: *ui.Context) void {
+        const src = self.edit_buf.buf.items;
+        const blocks = markdown.splitBlocks(c.alloc(), src) catch return;
+
+        const col = ui.div(c).column().wFull().gap(10);
+        defer col.end();
+
+        for (blocks, 0..) |block, idx| {
+            ui.keyInt(c, idx);
+            if (self.active_block == idx) {
+                const res = ui.textArea(c, &self.block_buf, .{
+                    .width = .fill,
+                    .size = 12.5,
+                    .max_lines = 64,
+                    .submit_on_return = false,
+                    .bare = true,
+                });
+                if (res.changed) {
+                    const new_text = self.block_buf.buf.items;
+                    _ = self.edit_buf.replace(self.active_range.start, self.active_range.end, new_text);
+                    self.active_range.end = self.active_range.start + new_text.len;
+                    self.dirty = true;
+                }
+                continue;
+            }
+
+            const row = ui.div(c).wFull().rounded(4).control().hover(c.theme.surface_hover);
+            {
+                defer row.end();
+                markdown.view(c, src[block.start..block.end]);
+            }
+            if (row.clicked()) {
+                self.editBlock(idx, block);
+                return;
+            }
+        }
+    }
+
+    fn renderRead(self: *Viewer, c: *ui.Context, name: []const u8, text: []const u8) void {
         if (markdown.isMarkdownFile(name)) {
             markdown.view(c, text);
             return;
         }
 
         const mono = highlight.isCodeFile(name);
-        const spans = if (live)
-            (highlight.highlight(c.alloc(), name, text, c.theme.dark) catch &.{})
-        else blk: {
-            self.ensureHighlights(name, text, c.theme.dark);
-            break :blk self.spans;
-        };
-        ui.richText(c, text, spans, .{
+        self.ensureHighlights(name, text, c.theme.dark);
+        ui.richText(c, text, self.spans, .{
             .size = if (mono) 12 else 12.5,
             .wrap = true,
             .mono = mono,
@@ -217,9 +248,6 @@ pub const Viewer = struct {
         }
         if (kit.button(c, "Read", .{ .variant = .ghost, .size = .sm, .selected = self.mode == .read }).clicked) {
             self.setMode(.read);
-        }
-        if (kit.button(c, "Split", .{ .variant = .ghost, .size = .sm, .selected = self.mode == .split }).clicked) {
-            self.setMode(.split);
         }
         if (kit.button(c, "Edit", .{ .variant = .ghost, .size = .sm, .selected = self.mode == .edit }).clicked) {
             self.setMode(.edit);
