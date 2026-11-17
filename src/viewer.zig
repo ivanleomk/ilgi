@@ -8,6 +8,8 @@ const markdown = @import("markdown.zig");
 
 const max_preview_bytes = 1024 * 1024;
 
+pub const ViewMode = enum { read, split, edit };
+
 pub const Viewer = struct {
     allocator: std.mem.Allocator,
     io: std.Io,
@@ -18,7 +20,7 @@ pub const Viewer = struct {
     spans_dark: bool = false,
     spans_ready: bool = false,
     status: ?[]const u8 = null,
-    editing: bool = false,
+    mode: ViewMode = .read,
     dirty: bool = false,
     edit_buf: ui.TextBuffer = .{},
 
@@ -84,21 +86,27 @@ pub const Viewer = struct {
             self.spans = &.{};
         }
         self.spans_ready = false;
-        self.editing = false;
+        self.mode = .read;
         self.dirty = false;
         self.edit_buf.clear();
         // `status` only holds compile-time string literals, so it is never freed.
         self.status = null;
     }
 
-    /// Switches into edit mode and loads the current file contents into `edit_buf`.
-    pub fn startEdit(self: *Viewer) void {
-        const text = self.content orelse return;
-        self.edit_buf.clear();
-        _ = self.edit_buf.insert(0, text);
-        self.edit_buf.focus();
-        self.editing = true;
-        self.dirty = false;
+    /// Switches into `next_mode` (`.split` or `.edit`) and loads `content` if coming from `.read`.
+    pub fn setMode(self: *Viewer, next_mode: ViewMode) void {
+        if (next_mode == .read) {
+            self.mode = .read;
+            return;
+        }
+        if (self.mode == .read) {
+            const text = self.content orelse return;
+            self.edit_buf.clear();
+            _ = self.edit_buf.insert(0, text);
+            self.edit_buf.focus();
+            self.dirty = false;
+        }
+        self.mode = next_mode;
     }
 
     /// Writes `edit_buf` back to disk and refreshes the preview content.
@@ -125,35 +133,68 @@ pub const Viewer = struct {
         self.topbarView(c, name);
         ui.divider(c);
 
-        const body = ui.div(c).column().grow().wFull().p(20).scrollY();
-        defer body.end();
-
-        if (self.editing) {
-            const res = ui.textArea(c, &self.edit_buf, .{
-                .placeholder = "Start typing...",
-                .width = .fill,
-                .size = 12.5,
-                .max_lines = 255,
-                .submit_on_return = false,
-                .bare = true,
-            });
-            if (res.changed) self.dirty = true;
+        if (self.content == null) {
+            const body = ui.div(c).column().grow().wFull().p(20).scrollY();
+            defer body.end();
+            if (self.status) |msg| ui.text(c, msg, .{ .size = 13, .color = c.theme.muted });
             return;
         }
 
-        const text = self.content orelse {
-            if (self.status) |msg| ui.text(c, msg, .{ .size = 13, .color = c.theme.muted });
-            return;
-        };
+        switch (self.mode) {
+            .read => {
+                const body = ui.div(c).column().grow().wFull().p(20).scrollY();
+                defer body.end();
+                self.renderPreview(c, name, self.content.?, false);
+            },
+            .edit => {
+                const body = ui.div(c).column().grow().wFull().p(20).scrollY();
+                defer body.end();
+                self.renderEditor(c);
+            },
+            .split => {
+                const split = ui.div(c).row().grow().wFull();
+                defer split.end();
 
+                const left = ui.div(c).column().grow().hFull().p(20).scrollY();
+                {
+                    defer left.end();
+                    self.renderEditor(c);
+                }
+                ui.div(c).w(1).hFull().bg(c.theme.border).end();
+
+                const right = ui.div(c).column().grow().hFull().p(20).scrollY();
+                defer right.end();
+                self.renderPreview(c, name, self.edit_buf.buf.items, true);
+            },
+        }
+    }
+
+    fn renderEditor(self: *Viewer, c: *ui.Context) void {
+        const res = ui.textArea(c, &self.edit_buf, .{
+            .placeholder = "Start typing...",
+            .width = .fill,
+            .size = 12.5,
+            .max_lines = 255,
+            .submit_on_return = false,
+            .bare = true,
+        });
+        if (res.changed) self.dirty = true;
+    }
+
+    fn renderPreview(self: *Viewer, c: *ui.Context, name: []const u8, text: []const u8, live: bool) void {
         if (markdown.isMarkdownFile(name)) {
             markdown.view(c, text);
             return;
         }
 
         const mono = highlight.isCodeFile(name);
-        self.ensureHighlights(name, text, c.theme.dark);
-        ui.richText(c, text, self.spans, .{
+        const spans = if (live)
+            (highlight.highlight(c.alloc(), name, text, c.theme.dark) catch &.{})
+        else blk: {
+            self.ensureHighlights(name, text, c.theme.dark);
+            break :blk self.spans;
+        };
+        ui.richText(c, text, spans, .{
             .size = if (mono) 12 else 12.5,
             .wrap = true,
             .mono = mono,
@@ -169,17 +210,19 @@ pub const Viewer = struct {
         ui.text(c, title, .{ .size = 14, .weight = .semibold });
 
         if (self.content == null) return;
-        const actions = ui.div(c).row().itemsCenter().gap(6);
+        const actions = ui.div(c).row().itemsCenter().gap(4);
         defer actions.end();
-        if (self.editing) {
-            if (self.dirty and kit.button(c, "Save", .{ .variant = .primary, .size = .sm }).clicked) {
-                self.save();
-            }
-            if (kit.button(c, "Read", .{ .variant = .secondary, .size = .sm }).clicked) {
-                self.editing = false;
-            }
-        } else if (kit.button(c, "Edit", .{ .variant = .secondary, .size = .sm, .icon = "pencil" }).clicked) {
-            self.startEdit();
+        if (self.dirty and kit.button(c, "Save", .{ .variant = .primary, .size = .sm }).clicked) {
+            self.save();
+        }
+        if (kit.button(c, "Read", .{ .variant = .ghost, .size = .sm, .selected = self.mode == .read }).clicked) {
+            self.setMode(.read);
+        }
+        if (kit.button(c, "Split", .{ .variant = .ghost, .size = .sm, .selected = self.mode == .split }).clicked) {
+            self.setMode(.split);
+        }
+        if (kit.button(c, "Edit", .{ .variant = .ghost, .size = .sm, .selected = self.mode == .edit }).clicked) {
+            self.setMode(.edit);
         }
     }
 
