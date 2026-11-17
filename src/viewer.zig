@@ -1,4 +1,4 @@
-//! File viewer component: Read mode + Obsidian-style single-pane Live Preview editing.
+//! File viewer component: Read mode + smooth Obsidian-style single-pane Live Preview.
 const std = @import("std");
 const nanoui = @import("nanoui");
 const ui = nanoui.ui;
@@ -23,7 +23,7 @@ pub const Viewer = struct {
     mode: ViewMode = .read,
     dirty: bool = false,
     edit_buf: ui.TextBuffer = .{},
-    active_block: ?usize = null,
+    editing_block: bool = false,
     active_range: markdown.BlockRange = .{ .start = 0, .end = 0 },
     block_buf: ui.TextBuffer = .{},
 
@@ -92,7 +92,7 @@ pub const Viewer = struct {
         self.spans_ready = false;
         self.mode = .read;
         self.dirty = false;
-        self.active_block = null;
+        self.editing_block = false;
         self.edit_buf.clear();
         self.block_buf.clear();
         // `status` only holds compile-time string literals, so it is never freed.
@@ -102,7 +102,7 @@ pub const Viewer = struct {
     /// Switches between `.read` and `.edit` (single-pane Live Preview for Markdown).
     pub fn setMode(self: *Viewer, next_mode: ViewMode) void {
         if (next_mode == .read) {
-            self.active_block = null;
+            self.editing_block = false;
             self.mode = .read;
             return;
         }
@@ -110,16 +110,16 @@ pub const Viewer = struct {
             const text = self.content orelse return;
             self.edit_buf.clear();
             _ = self.edit_buf.insert(0, text);
-            self.active_block = null;
+            self.editing_block = false;
             self.dirty = false;
             if (!markdown.isMarkdownFile(self.file_name orelse "")) self.edit_buf.focus();
         }
         self.mode = .edit;
     }
 
-    /// Selects a single Markdown block for inline raw editing while keeping others formatted.
-    pub fn editBlock(self: *Viewer, idx: usize, range: markdown.BlockRange) void {
-        self.active_block = idx;
+    /// Activates a Markdown block `[range.start..range.end)` in `edit_buf` for inline editing.
+    pub fn editBlock(self: *Viewer, range: markdown.BlockRange) void {
+        self.editing_block = true;
         self.active_range = range;
         self.block_buf.clear();
         _ = self.block_buf.insert(0, self.edit_buf.buf.items[range.start..range.end]);
@@ -181,40 +181,53 @@ pub const Viewer = struct {
 
     fn renderLiveMarkdown(self: *Viewer, c: *ui.Context) void {
         const src = self.edit_buf.buf.items;
-        const blocks = markdown.splitBlocks(c.alloc(), src) catch return;
-
         const col = ui.div(c).column().wFull().gap(10);
         defer col.end();
 
-        for (blocks, 0..) |block, idx| {
-            ui.keyInt(c, idx);
-            if (self.active_block == idx) {
-                const res = ui.textArea(c, &self.block_buf, .{
-                    .width = .fill,
-                    .size = 12.5,
-                    .max_lines = 64,
-                    .submit_on_return = false,
-                    .bare = true,
-                });
-                if (res.changed) {
-                    const new_text = self.block_buf.buf.items;
-                    _ = self.edit_buf.replace(self.active_range.start, self.active_range.end, new_text);
-                    self.active_range.end = self.active_range.start + new_text.len;
-                    self.dirty = true;
-                }
-                continue;
-            }
+        if (!self.editing_block) {
+            _ = self.renderBlockSlice(c, src, 0, 0);
+            return;
+        }
 
-            const row = ui.div(c).wFull().rounded(4).control().hover(c.theme.surface_hover);
+        // Render blocks before the active range, the active editor, then blocks after.
+        // Splitting before/after separately keeps `active_range` stable across newlines.
+        const r = self.active_range;
+        const next_id = self.renderBlockSlice(c, src[0..r.start], 0, 0);
+
+        ui.key(c, "active-md-block");
+        const active_size = blockFontSize(self.block_buf.buf.items);
+        const res = ui.textArea(c, &self.block_buf, .{
+            .width = .fill,
+            .size = active_size,
+            .max_lines = 64,
+            .submit_on_return = false,
+            .bare = true,
+        });
+        if (res.changed) {
+            const new_text = self.block_buf.buf.items;
+            _ = self.edit_buf.replace(r.start, r.end, new_text);
+            self.active_range.end = r.start + new_text.len;
+            self.dirty = true;
+        }
+
+        _ = self.renderBlockSlice(c, src[self.active_range.end..], self.active_range.end, next_id);
+    }
+
+    fn renderBlockSlice(self: *Viewer, c: *ui.Context, slice: []const u8, base_offset: usize, start_id: usize) usize {
+        const blocks = markdown.splitBlocks(c.alloc(), slice) catch return start_id;
+        for (blocks, 0..) |b, i| {
+            ui.keyInt(c, start_id + i);
+            const row = ui.div(c).wFull().control();
             {
                 defer row.end();
-                markdown.view(c, src[block.start..block.end]);
+                markdown.view(c, slice[b.start..b.end]);
             }
             if (row.clicked()) {
-                self.editBlock(idx, block);
-                return;
+                self.editBlock(.{ .start = base_offset + b.start, .end = base_offset + b.end });
+                return start_id + i + 1;
             }
         }
+        return start_id + blocks.len;
     }
 
     fn renderRead(self: *Viewer, c: *ui.Context, name: []const u8, text: []const u8) void {
@@ -262,6 +275,14 @@ pub const Viewer = struct {
         self.spans_ready = true;
     }
 };
+
+fn blockFontSize(src: []const u8) f32 {
+    if (std.mem.startsWith(u8, src, "# ")) return 20;
+    if (std.mem.startsWith(u8, src, "## ")) return 17;
+    if (std.mem.startsWith(u8, src, "### ")) return 15;
+    if (std.mem.startsWith(u8, src, "```")) return 12;
+    return 13;
+}
 
 fn emptyView(c: *ui.Context) void {
     const empty = ui.div(c).column().sizeFull().itemsCenter().justifyCenter().gap(8);

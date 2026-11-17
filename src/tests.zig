@@ -89,7 +89,7 @@ test "Sidebar renders per-folder collapsible trees and previews selected file" {
     state.viewer.setMode(.edit);
     const blocks = try @import("markdown.zig").splitBlocks(alloc, state.viewer.edit_buf.buf.items);
     defer alloc.free(blocks);
-    state.viewer.editBlock(0, blocks[0]);
+    state.viewer.editBlock(blocks[0]);
     _ = state.viewer.block_buf.insert(state.viewer.block_buf.buf.items.len, "\nEdited line");
     _ = state.viewer.edit_buf.replace(state.viewer.active_range.start, state.viewer.active_range.end, state.viewer.block_buf.buf.items);
     state.viewer.save();
