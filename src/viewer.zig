@@ -40,6 +40,7 @@ pub const Viewer = struct {
     ac_dismissed_start: ?usize = null,
     last_caret: usize = 0,
     last_anchor: usize = 0,
+    last_editor_id: u64 = 0,
 
     pub fn init(allocator: std.mem.Allocator, io: std.Io) Viewer {
         return .{ .allocator = allocator, .io = io };
@@ -221,6 +222,7 @@ pub const Viewer = struct {
         if (c.focused_text) |ft| {
             self.last_caret = ft.caret;
             self.last_anchor = ft.anchor;
+            self.last_editor_id = ft.id;
         }
         if (tab_inserted or res.changed) self.dirty = true;
     }
@@ -278,8 +280,12 @@ pub const Viewer = struct {
 
         // Render blocks before the active range, the active editor, then blocks after.
         // Splitting before/after separately keeps `active_range` stable across newlines.
-        const r_start = @min(self.active_range.start, src.len);
-        var r_end = @min(@max(self.active_range.end, r_start), src.len);
+        if (!ac_open) {
+            self.handleBlockUpDown(c);
+        }
+        const cur_src = self.edit_buf.buf.items;
+        const r_start = @min(self.active_range.start, cur_src.len);
+        var r_end = @min(@max(self.active_range.end, r_start), cur_src.len);
 
         if (self.block_buf.buf.items.len == 0 and r_start > 0 and isBackspace(c)) {
             c.input.key = null;
@@ -287,7 +293,7 @@ pub const Viewer = struct {
             return;
         }
 
-        const next_id = self.renderBlockSlice(c, src[0..r_start], 0, 0);
+        const next_id = self.renderBlockSlice(c, cur_src[0..r_start], 0, 0);
 
         ui.keyInt(c, 900_000 + self.block_gen);
         const just_opened = self.block_just_opened;
@@ -316,6 +322,7 @@ pub const Viewer = struct {
         if (c.focused_text) |ft| {
             self.last_caret = ft.caret;
             self.last_anchor = ft.anchor;
+            self.last_editor_id = ft.id;
         }
         if (res.submitted and active_query != null and self.ac_dismissed_start != active_query.?.start) {
             var sub_matches: [6]NoteEntry = undefined;
@@ -467,6 +474,62 @@ pub const Viewer = struct {
                 self.acceptLinkCompletion(c, r_start, q, entry);
                 return;
             }
+        }
+    }
+
+    fn handleBlockUpDown(self: *Viewer, c: *ui.Context) void {
+        const src = self.edit_buf.buf.items;
+        const r_start = @min(self.active_range.start, src.len);
+        var r_end = @min(@max(self.active_range.end, r_start), src.len);
+
+        var on_first = self.last_caret == 0;
+        var on_last = self.last_caret >= self.block_buf.buf.items.len;
+        if (c.focused_text) |ft| {
+            if (ft.id == self.last_editor_id) {
+                if (c.rects.get(self.last_editor_id)) |box| {
+                    on_first = ft.caret_rect.y < box.y + ft.caret_rect.h * 0.5;
+                    on_last = ft.caret_rect.y + ft.caret_rect.h > box.y + box.h - ft.caret_rect.h * 0.5;
+                }
+            }
+        }
+
+        const has_prev = std.mem.trim(u8, src[0..r_start], "\r\n").len > 0;
+        const has_next = std.mem.trim(u8, src[r_end..], "\r\n").len > 0;
+
+        if (on_first and has_prev and (c.shortcut(.{ .key = ui.Shortcut.up }) or c.input.key == .up)) {
+            c.input.key = null;
+            c.input.ops = &.{};
+            const cur_text = self.block_buf.buf.items;
+            if (!std.mem.eql(u8, cur_text, src[r_start..r_end])) {
+                _ = self.edit_buf.replace(r_start, r_end, cur_text);
+                self.dirty = true;
+            }
+            const prev_blocks = markdown.splitBlocks(c.alloc(), self.edit_buf.buf.items[0..r_start]) catch return;
+            if (prev_blocks.len == 0) return;
+            const prev = prev_blocks[prev_blocks.len - 1];
+            self.editBlock(prev);
+            self.block_buf.want_caret = prev.end - prev.start;
+            self.last_caret = prev.end - prev.start;
+            self.last_anchor = self.last_caret;
+            return;
+        }
+
+        if (on_last and has_next and (c.shortcut(.{ .key = ui.Shortcut.down }) or c.input.key == .down)) {
+            c.input.key = null;
+            c.input.ops = &.{};
+            const cur_text = self.block_buf.buf.items;
+            if (!std.mem.eql(u8, cur_text, src[r_start..r_end])) {
+                _ = self.edit_buf.replace(r_start, r_end, cur_text);
+                r_end = r_start + cur_text.len;
+                self.dirty = true;
+            }
+            const next_blocks = markdown.splitBlocks(c.alloc(), self.edit_buf.buf.items[r_end..]) catch return;
+            if (next_blocks.len == 0) return;
+            const next = next_blocks[0];
+            self.editBlock(.{ .start = r_end + next.start, .end = r_end + next.end });
+            self.block_buf.want_caret = 0;
+            self.last_caret = 0;
+            self.last_anchor = 0;
         }
     }
 

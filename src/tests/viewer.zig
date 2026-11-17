@@ -267,3 +267,43 @@ test "Live Preview: Cmd+Z on new block after Enter does not duplicate previous b
     t.settle(0.1);
     try std.testing.expectEqualStrings("", viewer.block_buf.buf.items);
 }
+
+test "Live Preview: Up and Down move between adjacent blocks at line boundaries" {
+    const alloc = std.testing.allocator;
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.writeFile(io, .{ .sub_path = "note.md", .data = "First block\n\nSecond block" });
+    const dir_path = try tmp.dir.realPathFileAlloc(io, ".", alloc);
+    defer alloc.free(dir_path);
+
+    var viewer = viewer_mod.Viewer.init(alloc, io);
+    defer viewer.deinit();
+    viewer.open(dir_path, "note.md");
+    const blocks = try markdown.splitBlocks(alloc, viewer.edit_buf.buf.items);
+    defer alloc.free(blocks);
+    viewer.editBlock(blocks[0]);
+
+    const Harness = struct {
+        viewer: *viewer_mod.Viewer,
+        fn view(h: *@This(), c: *ui.Context) void {
+            h.viewer.view(c);
+        }
+    };
+    var h: Harness = .{ .viewer = &viewer };
+    var t: ui.Tester = undefined;
+    try t.init(alloc, .init(&h, Harness.view), .{ .width = 800, .height = 600 });
+    defer t.deinit();
+    t.settle(0.1);
+
+    // Down from single-line First block moves to Second block (caret 0).
+    t.key(.down);
+    t.settle(0.1);
+    try std.testing.expectEqualStrings("Second block", viewer.block_buf.buf.items);
+
+    // Up from single-line Second block moves back to First block.
+    t.key(.up);
+    t.settle(0.1);
+    try std.testing.expectEqualStrings("First block", viewer.block_buf.buf.items);
+}
