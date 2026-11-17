@@ -201,3 +201,20 @@ test "Link autocomplete: Up/Down navigates, Enter accepts selected item, Esc clo
     t.settle(0.1);
     try std.testing.expectEqualStrings("See [ref](sample.md)", viewer.block_buf.buf.items);
 }
+
+test "markdown.parseInline strips [label](url) and **bold** markers" {
+    const alloc = std.testing.allocator;
+    const rich = try @import("../markdown.zig").parseInline(
+        alloc,
+        "That's **famously** nice [testing](sample.md) is",
+        .{ .r = 0.2, .g = 0.2, .b = 0.2, .a = 1 },
+        .{ .r = 0.2, .g = 0.6, .b = 1, .a = 1 },
+    );
+    defer alloc.free(rich.text);
+    defer alloc.free(rich.spans);
+    try std.testing.expectEqualStrings("That's famously nice testing is", rich.text);
+    try std.testing.expectEqual(@as(usize, 2), rich.spans.len);
+    try std.testing.expectEqualStrings("famously", rich.text[rich.spans[0].start..rich.spans[0].end]);
+    try std.testing.expectEqualStrings("testing", rich.text[rich.spans[1].start..rich.spans[1].end]);
+    try std.testing.expect(rich.spans[1].underline);
+}
