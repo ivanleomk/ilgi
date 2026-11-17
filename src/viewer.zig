@@ -24,6 +24,7 @@ pub const Viewer = struct {
     dirty: bool = false,
     edit_buf: ui.TextBuffer = .{},
     editing_block: bool = false,
+    block_just_opened: bool = false,
     active_range: markdown.BlockRange = .{ .start = 0, .end = 0 },
     block_buf: ui.TextBuffer = .{},
     pending_link: ?[]const u8 = null,
@@ -128,6 +129,7 @@ pub const Viewer = struct {
     /// Activates a Markdown block `[range.start..range.end)` in `edit_buf` for inline editing.
     pub fn editBlock(self: *Viewer, range: markdown.BlockRange) void {
         self.editing_block = true;
+        self.block_just_opened = true;
         self.active_range = range;
         self.block_buf.clear();
         _ = self.block_buf.insert(0, self.edit_buf.buf.items[range.start..range.end]);
@@ -217,6 +219,8 @@ pub const Viewer = struct {
         const next_id = self.renderBlockSlice(c, src[0..r_start], 0, 0);
 
         ui.key(c, "active-md-block");
+        const just_opened = self.block_just_opened;
+        self.block_just_opened = false;
         const tab_inserted = self.handleTabKey(c, &self.block_buf);
         const block_text = self.block_buf.buf.items;
         const is_fenced = std.mem.startsWith(u8, std.mem.trimStart(u8, block_text, " \t"), "```");
@@ -254,7 +258,7 @@ pub const Viewer = struct {
             self.dirty = true;
             return;
         }
-        if (!res.focused and !self.block_buf.want_focus) {
+        if (!just_opened and !res.focused) {
             self.editing_block = false;
         }
 
