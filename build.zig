@@ -14,8 +14,18 @@ pub fn build(b: *std.Build) void {
             .imports = &.{.{ .name = "nanoui", .module = nanoui }},
         }),
     });
+    exe.root_module.addAnonymousImport("app_icon", .{
+        .root_source_file = b.path("assets/icon.png"),
+    });
     if (target.result.os.tag == .windows) exe.subsystem = .windows;
     b.installArtifact(exe);
+
+    const app_step = b.step("app", "Build Ilgi.app bundle");
+    app_step.dependOn(&b.addInstallArtifact(exe, .{
+        .dest_dir = .{ .override = .{ .custom = "Ilgi.app/Contents/MacOS" } },
+    }).step);
+    app_step.dependOn(&b.addInstallFile(b.path("assets/Info.plist"), "Ilgi.app/Contents/Info.plist").step);
+    app_step.dependOn(&b.addInstallFile(b.path("assets/AppIcon.icns"), "Ilgi.app/Contents/Resources/AppIcon.icns").step);
 
     const run = b.addRunArtifact(exe);
     run.addPassthruArgs();

@@ -33,6 +33,7 @@ pub fn main(init: nanoui.Init) void {
 
     _ = app.newWindow(.{
         .title = "Ilgi",
+        .icon = @embedFile("app_icon"),
         .width = 960,
         .height = 640,
         .content = .{ .view = .init(&state, app_view.State.view) },
