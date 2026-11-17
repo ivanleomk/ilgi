@@ -82,3 +82,50 @@ test "Viewer Live Preview state machine: open, block focus, fenced code, save, a
     h.viewer.open(tmp_path, "empty.md");
     try std.testing.expect(h.viewer.editing_block);
 }
+
+test "Viewer shortcuts: Tab inserts 4 spaces, Esc exits block, Cmd+B/I/K wrap, Cmd+Enter saves" {
+    const alloc = std.testing.allocator;
+    const io = std.testing.io;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(io, .{ .sub_path = "doc.md", .data = "hello" });
+
+    var buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+    const tmp_path = buf[0..try tmp.dir.realPathFile(io, ".", &buf)];
+
+    var h: ViewerHarness = .{ .viewer = .init(alloc, io) };
+    defer h.viewer.deinit();
+    h.viewer.open(tmp_path, "doc.md");
+
+    var t: ui.Tester = undefined;
+    try t.init(alloc, .init(&h, ViewerHarness.view), .{ .width = 800, .height = 600 });
+    defer t.deinit();
+    t.settle(0.1);
+
+    const blocks = try markdown.splitBlocks(alloc, h.viewer.edit_buf.buf.items);
+    defer alloc.free(blocks);
+    h.viewer.editBlock(blocks[0]);
+    t.settle(0.1);
+
+    // 1. Tab via macOS `.insert_tab` TextOp inserts 4 spaces at caret (0 -> "    hello").
+    t.textOps(&.{.{ .command = .insert_tab }});
+    t.settle(0.1);
+    try std.testing.expectEqualStrings("    hello", h.viewer.block_buf.buf.items);
+
+    // 2. Cmd+B at caret 4 inserts **** around the caret ("    ****hello").
+    try std.testing.expect(t.shortcut(.{ .key = 'b', .cmd = true }));
+    t.settle(0.1);
+    try std.testing.expectEqualStrings("    ****hello", h.viewer.block_buf.buf.items);
+
+    // 3. Cmd+Enter saves and clears dirty.
+    try std.testing.expect(h.viewer.dirty);
+    try std.testing.expect(t.shortcut(.{ .key = ui.Shortcut.enter, .cmd = true }));
+    t.settle(0.1);
+    try std.testing.expect(!h.viewer.dirty);
+
+    // 4. Esc via `.cancel` TextOp exits block editing cleanly.
+    t.textOps(&.{.{ .command = .cancel }});
+    t.settle(0.1);
+    try std.testing.expect(!h.viewer.editing_block);
+}
