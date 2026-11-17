@@ -10,6 +10,11 @@ const max_preview_bytes = 1024 * 1024;
 
 pub const ViewMode = enum { read, edit };
 
+pub const NoteEntry = struct {
+    name: []const u8,
+    full_path: []const u8,
+};
+
 pub const Viewer = struct {
     allocator: std.mem.Allocator,
     io: std.Io,
@@ -28,7 +33,7 @@ pub const Viewer = struct {
     active_range: markdown.BlockRange = .{ .start = 0, .end = 0 },
     block_buf: ui.TextBuffer = .{},
     pending_link: ?[]const u8 = null,
-    note_names: []const []const u8 = &.{},
+    note_entries: []const NoteEntry = &.{},
     last_caret: usize = 0,
     last_anchor: usize = 0,
 
@@ -320,15 +325,15 @@ pub const Viewer = struct {
         return false;
     }
 
-    fn firstLinkMatch(self: *const Viewer, query: []const u8) ?[]const u8 {
-        for (self.note_names) |name| {
-            if (containsIgnoreCase(name, query)) return name;
+    fn firstLinkMatch(self: *const Viewer, query: []const u8) ?NoteEntry {
+        for (self.note_entries) |entry| {
+            if (containsIgnoreCase(entry.name, query)) return entry;
         }
         return null;
     }
 
-    fn acceptLinkCompletion(self: *Viewer, c: *ui.Context, r_start: usize, q: LinkQuery, name: []const u8) void {
-        const rep = if (q.is_wiki) c.print("{s}]]", .{name}) else c.print("{s}.md)", .{name});
+    fn acceptLinkCompletion(self: *Viewer, c: *ui.Context, r_start: usize, q: LinkQuery, entry: NoteEntry) void {
+        const rep = if (q.is_wiki) c.print("{s}]]", .{std.fs.path.stem(entry.name)}) else c.print("{s})", .{entry.name});
         _ = self.block_buf.replace(q.start, q.end, rep);
         self.block_buf.want_caret = q.start + rep.len;
         self.block_buf.focus();
@@ -338,28 +343,74 @@ pub const Viewer = struct {
         self.dirty = true;
     }
 
+    fn readSnippet(self: *const Viewer, alloc: std.mem.Allocator, full_path: []const u8) []const u8 {
+        const file = std.Io.Dir.openFileAbsolute(self.io, full_path, .{}) catch return "";
+        defer file.close(self.io);
+        var buf: [256]u8 = undefined;
+        const n = file.readPositionalAll(self.io, &buf, 0) catch return "";
+        var it = std.mem.splitScalar(u8, buf[0..n], '\n');
+        while (it.next()) |raw_line| {
+            const trimmed = std.mem.trim(u8, raw_line, " \t\r#");
+            if (trimmed.len == 0) continue;
+            const max_len: usize = 44;
+            if (trimmed.len <= max_len) return alloc.dupe(u8, trimmed) catch "";
+            const out = alloc.alloc(u8, max_len + 3) catch return "";
+            @memcpy(out[0..max_len], trimmed[0..max_len]);
+            @memcpy(out[max_len .. max_len + 3], "...");
+            return out;
+        }
+        return "";
+    }
+
     fn renderLinkAutocomplete(self: *Viewer, c: *ui.Context, r_start: usize) void {
-        if (self.note_names.len == 0) return;
+        if (self.note_entries.len == 0) return;
         const text = self.block_buf.buf.items;
         const q = findLinkQuery(text, @min(self.last_caret, text.len)) orelse return;
 
-        var matches: [6][]const u8 = undefined;
+        var matches: [6]NoteEntry = undefined;
         var count: usize = 0;
-        for (self.note_names) |name| {
-            if (containsIgnoreCase(name, q.query)) {
-                matches[count] = name;
+        for (self.note_entries) |entry| {
+            if (containsIgnoreCase(entry.name, q.query)) {
+                matches[count] = entry;
                 count += 1;
                 if (count == matches.len) break;
             }
         }
         if (count == 0) return;
 
-        const popup = ui.div(c).column().w(240).bg(c.theme.surface).border(c.theme.border).borderW(1).rounded(8).p(4).gap(2);
+        const caret = if (c.focused_text) |ft| ft.caret_rect else ui.Rect{ .x = 24, .y = 80, .w = 2, .h = 18 };
+        const popup_w: f32 = 300;
+        const est_h: f32 = @as(f32, @floatFromInt(count)) * 44 + 10;
+        const px = @min(@max(8, caret.x), @max(8, c.size.w - popup_w - 8));
+        const below_y = caret.y + caret.h + 6;
+        const py = if (below_y + est_h > c.size.h - 8 and caret.y > est_h + 8) caret.y - est_h - 6 else below_y;
+
+        const popup = ui.div(c).fixed().offset(px, py).layer(20).column().w(popup_w).bg(c.theme.surface).border(c.theme.border).borderW(1).rounded(8).p(4).gap(2).shadow(.{ .color = c.theme.shadow.alpha(0.6), .blur = 16, .y = 6 });
         defer popup.end();
-        for (matches[0..count], 0..) |name, mi| {
+        for (matches[0..count], 0..) |entry, mi| {
             ui.keyInt(c, 700_000 + mi);
-            if (kit.button(c, name, .{ .variant = .ghost, .size = .xs, .full_width = true, .icon = "doc.text" }).clicked) {
-                self.acceptLinkCompletion(c, r_start, q, name);
+            var row_div = ui.div(c).column().wFull().px(8).py(5).rounded(6).gap(1);
+            row_div = if (mi == 0) row_div.bg(c.theme.surface_hover).control() else row_div.hover(c.theme.surface_hover).control();
+            {
+                defer row_div.end();
+                const top = ui.div(c).row().wFull().itemsCenter().gap(6);
+                {
+                    defer top.end();
+                    ui.icon(c, "doc.text", .{ .size = 12, .color = if (mi == 0) c.theme.accent else c.theme.muted });
+                    ui.text(c, std.fs.path.stem(entry.name), .{ .size = 12.5, .weight = .medium, .color = c.theme.text, .truncate = .ellipsis });
+                    ui.spacer(c);
+                    const ext = std.fs.path.extension(entry.name);
+                    if (ext.len > 0) {
+                        ui.text(c, ext, .{ .size = 11, .mono = true, .color = c.theme.muted });
+                    }
+                }
+                const snippet = self.readSnippet(c.alloc(), entry.full_path);
+                if (snippet.len > 0) {
+                    ui.text(c, snippet, .{ .size = 11, .color = c.theme.muted, .truncate = .ellipsis });
+                }
+            }
+            if (row_div.clicked()) {
+                self.acceptLinkCompletion(c, r_start, q, entry);
                 return;
             }
         }

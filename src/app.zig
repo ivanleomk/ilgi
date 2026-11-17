@@ -39,11 +39,11 @@ pub const State = struct {
         } else {
             self.viewer.clear();
         }
-        var names: std.ArrayList([]const u8) = .empty;
+        var entries: std.ArrayList(viewer_mod.NoteEntry) = .empty;
         for (self.sidebar.rows.items) |row| {
-            if (!row.is_dir) names.append(c.alloc(), std.fs.path.stem(row.name)) catch break;
+            if (!row.is_dir) entries.append(c.alloc(), .{ .name = row.name, .full_path = row.full_path }) catch break;
         }
-        self.viewer.note_names = names.items;
+        self.viewer.note_entries = entries.items;
         self.viewer.view(c);
     }
 };
