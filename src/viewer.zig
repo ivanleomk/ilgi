@@ -198,6 +198,8 @@ pub const Viewer = struct {
             .placeholder = "Start typing...",
             .width = .fill,
             .size = if (mono) 12 else 12.5,
+            .leading = if (mono) 1.55 else 1.65,
+            .caret_width = 2.5,
             .mono = mono,
             .spans = code_spans,
             .max_lines = 255,
@@ -257,6 +259,8 @@ pub const Viewer = struct {
         const res = ui.textArea(c, &self.block_buf, .{
             .width = .fill,
             .size = blockFontSize(block_text),
+            .leading = if (is_fenced) 1.55 else 1.65,
+            .caret_width = 2.5,
             .mono = is_fenced,
             .spans = live_spans,
             .max_lines = 64,
@@ -394,7 +398,7 @@ pub const Viewer = struct {
             .size = if (mono) 12 else 12.5,
             .wrap = true,
             .mono = mono,
-            .leading = 1.45,
+            .leading = if (mono) 1.55 else 1.65,
         });
     }
 

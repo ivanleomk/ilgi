@@ -209,7 +209,7 @@ pub fn view(c: *ui.Context, src: []const u8) void {
         }
 
         // Paragraph
-        richLine(c, raw_line, .{ .size = 13, .wrap = true, .leading = 1.5 });
+        richLine(c, raw_line, .{ .size = 13, .wrap = true, .leading = 1.65 });
     }
 }
 
@@ -223,7 +223,7 @@ fn codeBlockView(c: *ui.Context, lang: []const u8, code: []const u8) void {
 
     const virt_name = if (lang.len > 0) c.print("block.{s}", .{langAlias(lang)}) else "block.txt";
     const spans = highlight.highlight(c.alloc(), virt_name, code, c.theme.dark) catch &.{};
-    ui.richText(c, code, spans, .{ .size = 12, .wrap = true, .mono = true, .leading = 1.45 });
+    ui.richText(c, code, spans, .{ .size = 12, .wrap = true, .mono = true, .leading = 1.55 });
 }
 
 fn richLine(c: *ui.Context, text: []const u8, style: ui.TextStyle) void {
