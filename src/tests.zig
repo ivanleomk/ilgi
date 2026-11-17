@@ -17,6 +17,7 @@ comptime {
     _ = @import("tests/highlight/go.zig");
     _ = @import("tests/highlight/md.zig");
     _ = @import("tests/markdown.zig");
+    _ = @import("tests/viewer.zig");
 }
 
 test "Sidebar renders per-folder collapsible trees and previews selected file" {

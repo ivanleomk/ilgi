@@ -383,7 +383,7 @@ pub const Viewer = struct {
     }
 };
 
-fn hasClosingFence(src: []const u8) bool {
+pub fn hasClosingFence(src: []const u8) bool {
     const nl = std.mem.indexOfScalar(u8, src, '\n') orelse return false;
     var rest = src[nl + 1 ..];
     const last_nl = std.mem.lastIndexOfScalar(u8, rest, '\n');
