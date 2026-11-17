@@ -191,8 +191,9 @@ pub const Viewer = struct {
 
         // Render blocks before the active range, the active editor, then blocks after.
         // Splitting before/after separately keeps `active_range` stable across newlines.
-        const r = self.active_range;
-        const next_id = self.renderBlockSlice(c, src[0..r.start], 0, 0);
+        const r_start = @min(self.active_range.start, src.len);
+        var r_end = @min(@max(self.active_range.end, r_start), src.len);
+        const next_id = self.renderBlockSlice(c, src[0..r_start], 0, 0);
 
         ui.key(c, "active-md-block");
         const is_fenced = std.mem.startsWith(u8, std.mem.trimStart(u8, self.block_buf.buf.items, " \t"), "```");
@@ -203,10 +204,11 @@ pub const Viewer = struct {
             .submit_on_return = !is_fenced,
             .bare = true,
         });
-        if (res.changed) {
-            const new_text = self.block_buf.buf.items;
-            _ = self.edit_buf.replace(r.start, r.end, new_text);
-            self.active_range.end = r.start + new_text.len;
+        const new_text = self.block_buf.buf.items;
+        if (res.changed or !std.mem.eql(u8, new_text, self.edit_buf.buf.items[r_start..r_end])) {
+            _ = self.edit_buf.replace(r_start, r_end, new_text);
+            r_end = r_start + new_text.len;
+            self.active_range = .{ .start = r_start, .end = r_end };
             self.dirty = true;
         }
         if (res.submitted) {
@@ -218,7 +220,9 @@ pub const Viewer = struct {
             return;
         }
 
-        _ = self.renderBlockSlice(c, src[self.active_range.end..], self.active_range.end, next_id);
+        const after_src = self.edit_buf.buf.items;
+        const after_start = @min(self.active_range.end, after_src.len);
+        _ = self.renderBlockSlice(c, after_src[after_start..], after_start, next_id);
     }
 
     fn renderBlockSlice(self: *Viewer, c: *ui.Context, slice: []const u8, base_offset: usize, start_id: usize) usize {
