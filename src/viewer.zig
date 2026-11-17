@@ -218,6 +218,10 @@ pub const Viewer = struct {
         const col = ui.div(c).column().wFull().gap(10);
         defer col.end();
 
+        if (self.editing_block and c.input.key == .escape) {
+            c.input.key = null;
+            self.editing_block = false;
+        }
         if (!self.editing_block) {
             const count = self.renderBlockSlice(c, src, 0, 0);
             if (count == 0) {
@@ -355,8 +359,8 @@ pub const Viewer = struct {
     fn handleTabKey(self: *Viewer, c: *ui.Context, buf: *ui.TextBuffer) bool {
         if (c.input.key == .tab and !c.input.shift) {
             const pos = @min(self.last_caret, buf.buf.items.len);
-            _ = buf.insert(pos, "  ");
-            buf.want_caret = pos + 2;
+            _ = buf.insert(pos, "    ");
+            buf.want_caret = pos + 4;
             c.input.key = null;
             return true;
         }
