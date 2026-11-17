@@ -198,6 +198,8 @@ pub const Viewer = struct {
             .placeholder = "Start typing...",
             .width = .fill,
             .size = if (mono) 12 else 12.5,
+            .leading = if (mono) 1.55 else 1.65,
+            .caret_width = 2.5,
             .mono = mono,
             .spans = code_spans,
             .max_lines = 255,
@@ -216,6 +218,11 @@ pub const Viewer = struct {
         const col = ui.div(c).column().wFull().gap(10);
         defer col.end();
 
+        if (self.editing_block and isEscape(c)) {
+            c.input.key = null;
+            c.input.ops = &.{};
+            self.editing_block = false;
+        }
         if (!self.editing_block) {
             const count = self.renderBlockSlice(c, src, 0, 0);
             if (count == 0) {
@@ -257,6 +264,8 @@ pub const Viewer = struct {
         const res = ui.textArea(c, &self.block_buf, .{
             .width = .fill,
             .size = blockFontSize(block_text),
+            .leading = if (is_fenced) 1.55 else 1.65,
+            .caret_width = 2.5,
             .mono = is_fenced,
             .spans = live_spans,
             .max_lines = 64,
@@ -349,14 +358,23 @@ pub const Viewer = struct {
     }
 
     fn handleTabKey(self: *Viewer, c: *ui.Context, buf: *ui.TextBuffer) bool {
-        if (c.input.key == .tab and !c.input.shift) {
-            const pos = @min(self.last_caret, buf.buf.items.len);
-            _ = buf.insert(pos, "  ");
-            buf.want_caret = pos + 2;
-            c.input.key = null;
-            return true;
+        var is_tab = (c.input.key == .tab and !c.input.shift);
+        if (!is_tab) {
+            for (c.input.ops) |op| {
+                if (op == .command and op.command == .insert_tab) {
+                    is_tab = true;
+                    break;
+                }
+            }
         }
-        return false;
+        if (!is_tab) return false;
+
+        const pos = @min(self.last_caret, buf.buf.items.len);
+        _ = buf.insert(pos, "    ");
+        buf.want_caret = pos + 4;
+        c.input.key = null;
+        c.input.ops = &.{};
+        return true;
     }
 
     fn handleMarkdownShortcuts(self: *Viewer, c: *ui.Context, buf: *ui.TextBuffer) bool {
@@ -394,7 +412,7 @@ pub const Viewer = struct {
             .size = if (mono) 12 else 12.5,
             .wrap = true,
             .mono = mono,
-            .leading = 1.45,
+            .leading = if (mono) 1.55 else 1.65,
         });
     }
 
@@ -427,6 +445,14 @@ pub const Viewer = struct {
         self.spans_ready = true;
     }
 };
+
+fn isEscape(c: *const ui.Context) bool {
+    if (c.input.key == .escape) return true;
+    for (c.input.ops) |op| {
+        if (op == .command and op.command == .cancel) return true;
+    }
+    return false;
+}
 
 fn isBackspace(c: *const ui.Context) bool {
     if (c.input.key == .backspace) return true;

@@ -5,8 +5,8 @@
     .minimum_zig_version = "0.17.0",
     .dependencies = .{
         .nanoui = .{
-            .url = "git+https://github.com/ivanleomk/nanoui#7ac5445f10753cc3e336e9c330710c252218e8d2",
-            .hash = "nanoui-0.14.6-we0KMdJKQgA3OIbFS9-v9gNgWLdeK7c_VoVBAim-GAt7",
+            .url = "git+https://github.com/ivanleomk/nanoui#bdf657dd1d9be5a3449c381bd0e180c92ad563f3",
+            .hash = "nanoui-0.14.6-we0KMZ9LQgCsaNx-9YxOOFDTcpuIKxMWxlrGJp3yt2NB",
         },
     },
     .paths = .{
