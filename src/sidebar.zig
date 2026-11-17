@@ -190,25 +190,26 @@ pub const Sidebar = struct {
         for (self.rows.items, 0..) |row, i| {
             ui.keyInt(c, i);
             const selected = self.isSelectedFile(row);
-            const indent: f32 = @as(f32, @floatFromInt(row.depth)) * 16 + 8;
+            const indent: f32 = @as(f32, @floatFromInt(row.depth)) * 12 + 8;
 
-            const outer = ui.div(c).row().wFull().itemsCenter().gap(2);
+            var outer = ui.div(c).row().wFull().pr(6).rounded(6).itemsCenter().gap(2);
+            outer = if (selected) outer.bg(c.theme.surface_hover) else outer.hover(c.theme.surface_hover);
+            const is_hovered = outer.hovered();
             {
                 defer outer.end();
 
-                var btn = ui.div(c).row().grow().pl(indent).pr(8).py(4).rounded(6).itemsCenter().gap(6).control();
-                btn = if (selected) btn.bg(c.theme.surface_hover) else btn.hover(c.theme.surface_hover);
+                const btn = ui.div(c).row().grow().pl(indent).pr(4).py(4).itemsCenter().gap(6).control();
                 {
                     defer btn.end();
                     const fg = if (selected) c.theme.accent else c.theme.text;
                     const icon_fg = if (selected) c.theme.accent else c.theme.muted;
 
                     if (row.is_dir) {
-                        ui.icon(c, if (row.expanded) "chevron.down" else "chevron.right", .{ .size = 10, .frame = 14, .color = icon_fg });
+                        ui.icon(c, if (row.expanded) "chevron.down" else "chevron.right", .{ .size = 9.5, .frame = 12, .color = icon_fg });
                         ui.icon(c, if (row.is_root) "folder.fill" else "folder", .{ .size = 13, .color = if (row.is_root) c.theme.accent else icon_fg });
                     } else {
-                        // Align file icons with the parent folder's icon (past the 14px chevron).
-                        ui.div(c).w(14).end();
+                        // Align file icons with the parent folder's icon (past the 12px chevron).
+                        ui.div(c).w(12).end();
                         ui.icon(c, "doc.text", .{ .size = 12.5, .color = icon_fg });
                     }
 
@@ -226,7 +227,7 @@ pub const Sidebar = struct {
                     self.selectRow(i);
                     return;
                 }
-                if (row.is_dir) {
+                if (row.is_dir and is_hovered) {
                     if (kit.iconButton(c, "doc.badge.plus", .{ .size = .xs, .tooltip = "New file" }).clicked) {
                         self.startCreate(row.full_path, .file);
                         return;
@@ -236,7 +237,7 @@ pub const Sidebar = struct {
                         return;
                     }
                 }
-                if (row.is_root and kit.iconButton(c, "xmark", .{ .size = .xs, .tooltip = "Remove folder" }).clicked) {
+                if (row.is_root and is_hovered and kit.iconButton(c, "xmark", .{ .size = .xs, .tooltip = "Remove folder" }).clicked) {
                     if (self.config.removeFolder(row.full_path)) {
                         self.config.save(self.io, self.config_path) catch {};
                         self.setExpanded(row.full_path, false);
@@ -247,7 +248,7 @@ pub const Sidebar = struct {
                     }
                     return;
                 }
-                if (!row.is_root and selected and kit.iconButton(c, "trash", .{ .size = .xs, .tooltip = "Delete" }).clicked) {
+                if (!row.is_root and (selected or is_hovered) and kit.iconButton(c, "trash", .{ .size = .xs, .tooltip = "Delete" }).clicked) {
                     self.deleteRow(i) catch {};
                     return;
                 }
@@ -260,7 +261,7 @@ pub const Sidebar = struct {
     }
 
     fn createInputRow(self: *Sidebar, c: *ui.Context, dir_path: []const u8, depth: u16) void {
-        const indent: f32 = @as(f32, @floatFromInt(depth)) * 16 + 22;
+        const indent: f32 = @as(f32, @floatFromInt(depth)) * 12 + 20;
         const box = ui.div(c).row().wFull().pl(indent).pr(6).py(2).itemsCenter().gap(4);
         defer box.end();
 
