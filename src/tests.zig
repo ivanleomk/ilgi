@@ -75,4 +75,16 @@ test "Sidebar renders per-folder collapsible trees and previews selected file" {
     t.settle(0.1);
     try std.testing.expectEqual(@as(usize, 3), state.sidebar.rows.items.len);
     try std.testing.expect(t.hasText("refresh.sh"));
+
+    // Create a subfolder and a file, then delete the file.
+    try state.sidebar.createFolder(notes_path, "sub");
+    try state.sidebar.createFile(notes_path, "new.md");
+    t.settle(0.1);
+    try std.testing.expect(t.hasText("sub"));
+    try std.testing.expect(t.hasText("new.md"));
+
+    // Delete "new.md" (row 2 under notes: 0=notes, 1=sub, 2=hello.md, 3=new.md).
+    try state.sidebar.deleteRow(3);
+    t.settle(0.1);
+    try std.testing.expect(!t.hasText("new.md"));
 }
