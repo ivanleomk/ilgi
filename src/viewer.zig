@@ -27,6 +27,8 @@ pub const Viewer = struct {
     active_range: markdown.BlockRange = .{ .start = 0, .end = 0 },
     block_buf: ui.TextBuffer = .{},
     pending_link: ?[]const u8 = null,
+    last_caret: usize = 0,
+    last_anchor: usize = 0,
 
     pub fn init(allocator: std.mem.Allocator, io: std.Io) Viewer {
         return .{ .allocator = allocator, .io = io };
@@ -164,13 +166,8 @@ pub const Viewer = struct {
             return;
         }
 
-        if (self.mode != .read) {
-            if (c.input.shortcut) |sc| {
-                if (sc.cmd and (sc.key == 's' or sc.key == 'S')) {
-                    self.save();
-                    c.input.shortcut = null;
-                }
-            }
+        if (self.mode != .read and c.shortcut(.{ .key = 's', .cmd = true })) {
+            self.save();
         }
 
         if (self.mode == .read) {
@@ -184,7 +181,7 @@ pub const Viewer = struct {
         }
 
         const mono = highlight.isCodeFile(name);
-        if (self.handleEditShortcuts(c, &self.edit_buf, false)) self.dirty = true;
+        const tab_inserted = self.handleTabKey(c, &self.edit_buf);
         const code_spans = if (mono) (highlight.highlight(c.alloc(), name, self.edit_buf.buf.items, c.theme.dark) catch &.{}) else &.{};
         const res = ui.textArea(c, &self.edit_buf, .{
             .placeholder = "Start typing...",
@@ -196,7 +193,11 @@ pub const Viewer = struct {
             .submit_on_return = false,
             .bare = true,
         });
-        if (res.changed) self.dirty = true;
+        if (c.focused_text) |ft| {
+            self.last_caret = ft.caret;
+            self.last_anchor = ft.anchor;
+        }
+        if (tab_inserted or res.changed) self.dirty = true;
     }
 
     fn renderLiveMarkdown(self: *Viewer, c: *ui.Context) void {
@@ -216,7 +217,7 @@ pub const Viewer = struct {
         const next_id = self.renderBlockSlice(c, src[0..r_start], 0, 0);
 
         ui.key(c, "active-md-block");
-        _ = self.handleEditShortcuts(c, &self.block_buf, true);
+        const tab_inserted = self.handleTabKey(c, &self.block_buf);
         const block_text = self.block_buf.buf.items;
         const is_fenced = std.mem.startsWith(u8, std.mem.trimStart(u8, block_text, " \t"), "```");
         const live_spans = if (is_fenced)
@@ -233,8 +234,13 @@ pub const Viewer = struct {
             .submit_on_return = !is_fenced,
             .bare = true,
         });
+        if (c.focused_text) |ft| {
+            self.last_caret = ft.caret;
+            self.last_anchor = ft.anchor;
+        }
+        const md_shortcut = self.handleMarkdownShortcuts(c, &self.block_buf);
         const new_text = self.block_buf.buf.items;
-        if (res.changed or !std.mem.eql(u8, new_text, self.edit_buf.buf.items[r_start..r_end])) {
+        if (tab_inserted or md_shortcut or res.changed or !std.mem.eql(u8, new_text, self.edit_buf.buf.items[r_start..r_end])) {
             _ = self.edit_buf.replace(r_start, r_end, new_text);
             r_end = r_start + new_text.len;
             self.active_range = .{ .start = r_start, .end = r_end };
@@ -289,30 +295,31 @@ pub const Viewer = struct {
         }
     }
 
-    fn handleEditShortcuts(self: *Viewer, c: *ui.Context, buf: *ui.TextBuffer, allow_markdown: bool) bool {
-        _ = self;
+    fn handleTabKey(self: *Viewer, c: *ui.Context, buf: *ui.TextBuffer) bool {
         if (c.input.key == .tab and !c.input.shift) {
-            const pos = if (c.focused_text) |ft| @min(ft.caret, buf.buf.items.len) else buf.buf.items.len;
+            const pos = @min(self.last_caret, buf.buf.items.len);
             _ = buf.insert(pos, "  ");
             buf.want_caret = pos + 2;
             c.input.key = null;
             return true;
         }
-        const sc = c.input.shortcut orelse return false;
-        if (!sc.cmd or !allow_markdown) return false;
+        return false;
+    }
 
-        const marker: ?struct { open: []const u8, close: []const u8 } = switch (sc.key) {
-            'b', 'B' => .{ .open = "**", .close = "**" },
-            'i', 'I' => .{ .open = "*", .close = "*" },
-            'k', 'K' => .{ .open = "[[", .close = "]]" },
-            else => null,
-        };
+    fn handleMarkdownShortcuts(self: *Viewer, c: *ui.Context, buf: *ui.TextBuffer) bool {
+        const marker: ?struct { open: []const u8, close: []const u8 } = if (c.shortcut(.{ .key = 'b', .cmd = true }))
+            .{ .open = "**", .close = "**" }
+        else if (c.shortcut(.{ .key = 'i', .cmd = true }))
+            .{ .open = "*", .close = "*" }
+        else if (c.shortcut(.{ .key = 'k', .cmd = true }))
+            .{ .open = "[[", .close = "]]" }
+        else
+            null;
+
         const m = marker orelse return false;
-        c.input.shortcut = null;
-
         const len = buf.buf.items.len;
-        const a = if (c.focused_text) |ft| @min(ft.caret, len) else len;
-        const b = if (c.focused_text) |ft| @min(ft.anchor, len) else len;
+        const a = @min(self.last_caret, len);
+        const b = @min(self.last_anchor, len);
         const lo = @min(a, b);
         const hi = @max(a, b);
         _ = buf.insert(hi, m.close);
