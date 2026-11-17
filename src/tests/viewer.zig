@@ -307,3 +307,25 @@ test "Live Preview: Up and Down move between adjacent blocks at line boundaries"
     t.settle(0.1);
     try std.testing.expectEqualStrings("First block", viewer.block_buf.buf.items);
 }
+
+test "markdown lists: numbered, alpha (a. b.), and Enter continuation" {
+    const md = @import("../markdown.zig");
+
+    const n1 = md.parseListPrefix("1. First item").?;
+    try std.testing.expectEqual(md.ListKind.numbered, n1.kind);
+    try std.testing.expectEqualStrings("1.", n1.marker);
+    try std.testing.expectEqualStrings("First item", n1.body);
+
+    const a1 = md.parseListPrefix("  a. Alpha item").?;
+    try std.testing.expectEqual(md.ListKind.alpha_lower, a1.kind);
+    try std.testing.expectEqual(@as(usize, 1), a1.depth);
+    try std.testing.expectEqualStrings("a.", a1.marker);
+    try std.testing.expectEqualStrings("Alpha item", a1.body);
+
+    var buf: [64]u8 = undefined;
+    try std.testing.expectEqualStrings("2. ", md.nextListPrefix(&buf, "1. First item").?);
+    try std.testing.expectEqualStrings("  b. ", md.nextListPrefix(&buf, "  a. Alpha item").?);
+    try std.testing.expectEqualStrings("B. ", md.nextListPrefix(&buf, "A. Upper").?);
+    try std.testing.expect(md.nextListPrefix(&buf, "2. ") == null);
+    try std.testing.expect(md.nextListPrefix(&buf, "normal text") == null);
+}

@@ -117,6 +117,10 @@ pub fn liveSpans(
         try spans.append(allocator, .{ .start = @intCast(prefix_len), .end = @intCast(src.len), .weight = .bold });
         return spans.toOwnedSlice(allocator);
     }
+    if (parseListPrefix(src)) |list| {
+        try spans.append(allocator, .{ .start = 0, .end = @intCast(list.prefix_len), .color = muted });
+        i = list.prefix_len;
+    }
 
     while (i < src.len) {
         if (src[i] == '[' and (i == 0 or src[i - 1] != '!') and (i + 1 >= src.len or src[i + 1] != '[')) {
@@ -354,14 +358,15 @@ pub fn view(c: *ui.Context, src: []const u8) void {
             continue;
         }
 
-        // Bullet list item (- ... or * ...)
-        if (std.mem.startsWith(u8, trimmed, "- ") or std.mem.startsWith(u8, trimmed, "* ")) {
-            const item = ui.div(c).row().wFull().pl(8).gap(8);
+        // List item (- / * / 1. / a. / A.)
+        if (parseListPrefix(raw_line)) |li| {
+            const pad_l: f32 = @floatFromInt(8 + li.depth * 16);
+            const item = ui.div(c).row().wFull().pl(pad_l).gap(8);
             defer item.end();
-            ui.text(c, "•", .{ .size = 13, .color = c.theme.muted });
+            ui.text(c, li.marker, .{ .size = 13, .color = c.theme.muted });
             const body = ui.div(c).grow();
             defer body.end();
-            richLine(c, trimmed[2..], .{ .size = 13, .wrap = true, .leading = 1.45 });
+            richLine(c, li.body, .{ .size = 13, .wrap = true, .leading = 1.45 });
             continue;
         }
 
@@ -398,6 +403,94 @@ fn richLine(c: *ui.Context, text: []const u8, style: ui.TextStyle) void {
         return;
     };
     ui.richText(c, rich.text, rich.spans, style);
+}
+
+pub const ListKind = enum { bullet, numbered, alpha_lower, alpha_upper };
+
+pub const ListItem = struct {
+    kind: ListKind,
+    indent: []const u8,
+    depth: usize,
+    marker: []const u8,
+    prefix_len: usize,
+    body: []const u8,
+};
+
+/// Parses `- `, `* `, `1. `, `a. `, or `A. ` list prefixes (with optional leading indent).
+pub fn parseListPrefix(raw_line: []const u8) ?ListItem {
+    var indent_bytes: usize = 0;
+    var cols: usize = 0;
+    while (indent_bytes < raw_line.len) : (indent_bytes += 1) {
+        if (raw_line[indent_bytes] == ' ') {
+            cols += 1;
+        } else if (raw_line[indent_bytes] == '\t') {
+            cols += 4;
+        } else break;
+    }
+    const depth = cols / 2;
+    const indent = raw_line[0..indent_bytes];
+    const rest = raw_line[indent_bytes..];
+
+    if (std.mem.startsWith(u8, rest, "- ") or std.mem.startsWith(u8, rest, "* ")) {
+        return .{
+            .kind = .bullet,
+            .indent = indent,
+            .depth = depth,
+            .marker = "•",
+            .prefix_len = indent_bytes + 2,
+            .body = rest[2..],
+        };
+    }
+    if (rest.len >= 3 and std.ascii.isDigit(rest[0])) {
+        var d: usize = 1;
+        while (d < rest.len and std.ascii.isDigit(rest[d])) : (d += 1) {}
+        if (d + 1 < rest.len and rest[d] == '.' and rest[d + 1] == ' ') {
+            return .{
+                .kind = .numbered,
+                .indent = indent,
+                .depth = depth,
+                .marker = rest[0 .. d + 1],
+                .prefix_len = indent_bytes + d + 2,
+                .body = rest[d + 2 ..],
+            };
+        }
+    }
+    if (rest.len >= 3 and std.ascii.isAlphabetic(rest[0]) and rest[1] == '.' and rest[2] == ' ') {
+        const kind: ListKind = if (std.ascii.isUpper(rest[0])) .alpha_upper else .alpha_lower;
+        return .{
+            .kind = kind,
+            .indent = indent,
+            .depth = depth,
+            .marker = rest[0..2],
+            .prefix_len = indent_bytes + 3,
+            .body = rest[3..],
+        };
+    }
+    return null;
+}
+
+/// Formats the next list item prefix (e.g. `1. ` -> `2. `, `a. ` -> `b. `, `- ` -> `- `),
+/// or `null` if `raw_line` is not a list item or has an empty body.
+pub fn nextListPrefix(buf: []u8, raw_line: []const u8) ?[]const u8 {
+    const li = parseListPrefix(raw_line) orelse return null;
+    if (std.mem.trim(u8, li.body, " \t").len == 0) return null;
+    return switch (li.kind) {
+        .bullet => std.fmt.bufPrint(buf, "{s}{s}", .{ li.indent, raw_line[li.indent.len..li.prefix_len] }) catch null,
+        .numbered => blk: {
+            const num = std.fmt.parseInt(usize, li.marker[0 .. li.marker.len - 1], 10) catch break :blk null;
+            break :blk std.fmt.bufPrint(buf, "{s}{d}. ", .{ li.indent, num + 1 }) catch null;
+        },
+        .alpha_lower => blk: {
+            const ch = li.marker[0];
+            if (ch >= 'z') break :blk null;
+            break :blk std.fmt.bufPrint(buf, "{s}{c}. ", .{ li.indent, ch + 1 }) catch null;
+        },
+        .alpha_upper => blk: {
+            const ch = li.marker[0];
+            if (ch >= 'Z') break :blk null;
+            break :blk std.fmt.bufPrint(buf, "{s}{c}. ", .{ li.indent, ch + 1 }) catch null;
+        },
+    };
 }
 
 fn headingLevel(line: []const u8) ?struct { level: usize, text: []const u8 } {

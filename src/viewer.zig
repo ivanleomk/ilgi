@@ -343,6 +343,26 @@ pub const Viewer = struct {
             self.dirty = true;
         }
         if (res.submitted) {
+            if (markdown.parseListPrefix(new_text)) |li| {
+                if (std.mem.trim(u8, li.body, " \t").len == 0) {
+                    _ = self.edit_buf.replace(r_start, r_end, "");
+                    self.editBlock(.{ .start = r_start, .end = r_start });
+                    self.dirty = true;
+                    return;
+                }
+                var next_buf: [64]u8 = undefined;
+                if (markdown.nextListPrefix(&next_buf, new_text)) |next_prefix| {
+                    const insert_at = self.active_range.end;
+                    const ins = c.print("\n{s}", .{next_prefix});
+                    _ = self.edit_buf.insert(insert_at, ins);
+                    self.editBlock(.{ .start = insert_at + 1, .end = insert_at + 1 + next_prefix.len });
+                    self.block_buf.want_caret = next_prefix.len;
+                    self.last_caret = next_prefix.len;
+                    self.last_anchor = next_prefix.len;
+                    self.dirty = true;
+                    return;
+                }
+            }
             // Commit this block (formatting it immediately) and open a new block on the next line.
             const insert_at = self.active_range.end;
             _ = self.edit_buf.insert(insert_at, "\n");
